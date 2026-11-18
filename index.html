@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Setu Desktop · Design preview</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="prototype.js" defer></script>
+</head>
+<body data-design="relay">
+  <a class="skip" href="#main">Skip to workspace</a>
+  <header class="chrome">
+    <a class="wordmark" href="#workspace" data-action="nav" data-value="workspace" aria-label="Setu workspace"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>setu<span class="brand-period">.</span></a>
+    <div class="design-switch" role="group" aria-label="Desktop design direction">
+      <button type="button" data-action="design" data-value="relay" aria-pressed="true">Relay</button>
+      <button type="button" data-action="design" data-value="signal" aria-pressed="false">Signal</button>
+      <button type="button" data-action="design" data-value="field" aria-pressed="false">Field</button>
+    </div>
+    <button type="button" class="button chrome-action" data-action="scenarios"><span class="scenario-mark" aria-hidden="true">◈</span> Demo scenarios</button>
+  </header>
+  <div id="shell" class="shell"></div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <input hidden id="evidence-file" type="file" accept="image/*,video/*">
+</body>
+</html>
