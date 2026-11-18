@@ -2,6 +2,14 @@
 
 Three clickable design directions for the Setu desktop companion on Windows, macOS, and Linux. The developer can pair or select a phone, attach ADB or an IDE, keep the tunnel running in the background, and review or share evidence from a session.
 
+## Narrated walkthrough
+
+Watch **Relay on desktop and Field on Android** in a 7:05 walkthrough. Follow both sides from email signup and phone readiness through pairing, ADB attachment, backgrounding, evidence sharing, and corporate audit. The video uses prototype screens and simulated sessions.
+
+https://github.com/user-attachments/assets/262dec47-998c-41a3-8a8a-dccc3fd21296
+
+[Chapters and transcript](docs/walkthrough/TRANSCRIPT.md) · [English captions](docs/walkthrough/setu-walkthrough.en.vtt) · [Download MP4](docs/walkthrough/setu-walkthrough.mp4)
+
 ## Open the prototype
 
 Open `index.html` in a browser. Choose **Relay**, **Signal**, or **Field** in the top bar. **Demo scenarios** loads example accounts and connections so you can compare the same tasks in each design. The prototype uses fictional data and runs locally without a build step.
