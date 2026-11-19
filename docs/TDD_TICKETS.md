@@ -197,7 +197,7 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 
 ### DT-03b · Event hub and session store
 - **Files:** `src-tauri/src/events/hub.rs` (dedicated events connection, `events.subscribe`), `src/state/sessionStore.ts` (reducer keyed by client session `s1…` and tunnel id), `src/state/clock.ts` (monotonic, injectable).
-- **Tests first:** P21, P17 restore, out-of-order and stale-session events ignored (part of P14).
+- **Tests first:** P21 (events that arrive during the `events.dropped` resync are held and applied only after `session.list` and, in Corporate, `devices.presence` return), P17 restore, out-of-order and stale-session events ignored (part of P14).
 - **SDK binding:** `events.subscribe`, the `event` and `events.dropped` notifications, `session.list`, event types §1.5.
 
 ### DT-04 · Solo pairing form with cancel
@@ -252,18 +252,19 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 
 ### DT-14 · Corporate sign-in and token rotation
 - **Files:** `src-tauri/src/identity/oidc.rs` (system browser, Authorization Code + PKCE, loopback redirect), `issuer_client.rs` (calls your org token service with `identity.public_key`), `token_file.rs` (atomic write, 0600), `src/features/corporate/SignIn.tsx`.
+- **Boundary:** OIDC tokens and Setu JWTs stay in Rust. `SignIn.tsx` only asks native code to start SSO and learns of the rotation from the forwarded `token_updated` event; `auth.set_token` and `identity.public_key` are not callable from the UI (SCREENS "Prototype RPC boundary").
 - **Tests first:** P12 (rewritten), P01 corporate entry, P11 `-32015`/`-32016` → SSO.
 - **SDK binding:** `identity.public_key`, `--identity-file` watch (2 s), `auth.set_token {token}` → `{subject, token_id?, expires_at}`, `token_updated` event, `error` event on a bad file.
 - **Out of scope here:** the org token service, which is a backend ticket.
 
 ### DT-15 · Corporate device directory
-- **Files:** `src/features/devices/CorporateDirectory.tsx`, `src/state/presenceStore.ts` (30 s poll, also on focus and `events.dropped`; fresh means under 60 s).
+- **Files:** `src/features/devices/CorporateDirectory.tsx`, `src/state/presenceStore.ts` (30 s poll, also on focus and `events.dropped`; a successful snapshot is fresh for under 60 s from receipt; an older, missing or failed snapshot shows **Last seen unknown**; never use `connected_at` as the clock).
 - **Tests first:** P08 (rebound), P21 corporate resync.
 - **SDK binding:** `devices.presence` → `{devices:[{device_id, online, connected_at?, transport?, sessions}]}`; `session.connect {device_id}`.
 
 ### DT-16 · Corporate recovery and end states
 - **Files:** `src/features/corporate/RecoveryPanel.tsx`, `endStates.ts`.
-- **Tests first:** P11 (extended), P13 (narrowed), P10 desktop half (`-32026` / `peer_closed` → "ended on the phone", no retry), P22 desktop label setting.
+- **Tests first:** P11 (extended), P13 (no T−5 warning without an authoritative session deadline, which v1.1.0 does not provide; a credential `expires_at` never triggers it), P10 desktop half (`-32026` / `peer_closed` → "ended on the phone" with `peer_reason` when present, no retry), P22 desktop label setting (the phone shows it under **Connected as (unverified)**).
 - **SDK binding:** `-32014`, `-32015`, `-32016`, `-32017`, `-32018`, `-32025`, `-32026`; `session_expired` and `peer_closed` events.
 
 ### DT-17 · Packaging and daemon sidecar
