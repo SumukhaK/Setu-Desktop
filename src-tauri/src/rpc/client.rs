@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -76,7 +76,7 @@ impl RpcClient {
             write_half,
             outgoing_rx,
             notifications_tx,
-            Arc::clone(&shared),
+            Arc::downgrade(&shared),
         ));
         Ok((Self { shared }, notifications_rx))
     }
@@ -178,6 +178,11 @@ impl Shared {
 
 /// Own the socket for one connection until it is closed (AD-3).
 ///
+/// The task holds the `Shared` state only through a `Weak`: when the last
+/// `RpcClient` is dropped, `Shared` and its outgoing sender drop with it,
+/// `recv()` below returns `None` and the socket halves drop, releasing the
+/// TCP connection.
+///
 /// Reads run between serialized writes; either direction failing — EOF,
 /// an oversize or unparseable frame, a write error, or a closed outgoing
 /// queue — ends the task, which closes the connection, fails every pending
@@ -188,7 +193,7 @@ async fn run_connection(
     mut write_half: OwnedWriteHalf,
     mut outgoing: mpsc::UnboundedReceiver<Vec<u8>>,
     notifications: mpsc::UnboundedSender<Notification>,
-    shared: Arc<Shared>,
+    shared: Weak<Shared>,
 ) {
     let mut decoder = LineDecoder::new();
     let mut buffer = vec![0u8; READ_BUFFER_BYTES];
@@ -201,7 +206,13 @@ async fn run_connection(
                         let mut violated = false;
                         for line in lines {
                             match serde_json::from_slice::<Value>(&line) {
-                                Ok(message) => dispatch(message, &shared, &notifications),
+                                // Every handle is gone: release the connection.
+                                Ok(message) => match shared.upgrade() {
+                                    Some(shared) => {
+                                        dispatch(message, &shared, &notifications)
+                                    }
+                                    None => break,
+                                },
                                 Err(_) => {
                                     violated = true;
                                     break;
@@ -226,7 +237,9 @@ async fn run_connection(
             },
         }
     }
-    shared.close();
+    if let Some(shared) = shared.upgrade() {
+        shared.close();
+    }
 }
 
 /// Route one inbound JSON-RPC message to its pending call or the
