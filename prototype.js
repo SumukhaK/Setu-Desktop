@@ -178,7 +178,7 @@ function corporateIssue(error = state.error) {
   const recovering = error === -32015 || error === -32016;
   return `<section class="card standard-card error-card">
     <div class="feature-icon">${icon('shield', 25)}</div>
-    <h2>${title} <code>${error}</code></h2><p><strong>${message}</strong></p><p class="muted">${fix}</p>
+    <h2>${title} <code>${error}</code></h2><p><strong>${message}</strong></p><p class="muted">${fix}</p>${error === -32026 && state.peerReason ? `<p class="hint">Reason from the phone: <code>${safe(state.peerReason)}</code></p>` : ''}
     <div class="button-row">${recovering ? button('sso', 'Sign in via SSO', 'primary', 'arrow') : [-32025, -32026].includes(error) ? button('recover-session', 'Reconnect', 'secondary', 'refresh') : button('admin', 'Contact IT administrator', 'secondary', 'help')}
     ${error === -32017 ? button('clear-error', 'Back to devices', 'quiet') : ''}</div>
   </section>`;
@@ -326,7 +326,7 @@ function settingsPage() {
   return heading('Settings', 'Local daemon startup configuration') +
     `<div class="page-grid"><section class="card standard-card"><div class="section-header"><h2>Relay and proxy</h2>${icon('settings', 20)}</div>
     <form data-form="settings" novalidate>
-      <label for="setting-label">Computer name</label><input id="setting-label" name="label" type="text" value="${safe(state.settings.label)}" maxlength="64" autocomplete="off" aria-describedby="label-hint"><p id="label-hint" class="hint">Sent as --label at startup. The phone shows it as an unverified computer name.</p>
+      <label for="setting-label">Computer name</label><input id="setting-label" name="label" type="text" value="${safe(state.settings.label)}" maxlength="64" autocomplete="off" aria-describedby="label-hint"><p id="label-hint" class="hint">Sent as --label at startup. The phone shows it under <strong>Connected as (unverified)</strong>.</p>
       <label for="setting-relay">Custom relay URL</label><input id="setting-relay" name="relay" type="text" value="${safe(state.settings.relay)}" placeholder="wss://relay.example.test" autocomplete="off" aria-describedby="relay-hint setting-error">
       <p id="relay-hint" class="hint">Use the administrator’s WSS/WS URL or a TCP host:port.</p>
       <label for="setting-pin">Relay certificate pin</label><input id="setting-pin" name="pin" type="text" value="${safe(state.settings.pin)}" autocomplete="off" spellcheck="false" aria-describedby="pin-hint setting-error">
@@ -401,15 +401,15 @@ function wirelessDialog() {
 }
 
 function ssoDialog() {
-  if (hasDesktopRpc && typeof window.setuDesktopRequestToken === 'function') {
-    void refreshToken();
+  if (hasDesktopRpc && typeof window.setuDesktopStartSso === 'function') {
+    void startNativeSso();
     return;
   }
   if (hasDesktopRpc) {
     openDialog('Corporate sign-in', '<p>Use your desktop app’s organization sign-in to send an updated identity token to the daemon.</p>');
     return;
   }
-  openDialog('Continue in your browser', `<p>Organization SSO uses <code>identity.public_key</code>. A returned Setu JWT is applied live through <code>auth.set_token</code>.</p>
+  openDialog('Continue in your browser', `<p>The desktop app’s native sign-in binds the Setu JWT to <code>identity.public_key</code> and applies it live through <code>auth.set_token</code>. This page never handles the token.</p>
     <div class="button-row dialog-actions">${button('close', 'Cancel', 'secondary')}${button('sso-return', 'Simulate browser SSO return', 'primary', 'arrow')}</div>`);
 }
 
@@ -492,19 +492,20 @@ async function refreshDirectory() {
   if (['devices','workspace'].includes(state.view) && !state.inTray) render();
 }
 
-async function setIdentityToken(token) {
-  await requestSdk('auth.set_token', { token });
+// Setu JWTs never enter page script. The native host runs SSO and calls auth.set_token
+// (or rewrites the --identity-file); the page only reacts to the daemon's token_updated event.
+function credentialUpdated() {
+  const recovering = !state.sso || [-32015,-32016].includes(state.error);
   state.sso = true;
   if ([-32015,-32016].includes(state.error)) state.error = null;
-  go(state.session || state.error ? 'workspace' : 'devices');
+  // A background identity-file rotation must not move the user away from the current screen.
+  if (recovering) go(state.session || state.error ? 'workspace' : 'devices');
   announce('Corporate credential updated. Existing sessions stay running.');
 }
 
-async function refreshToken() {
+async function startNativeSso() {
   try {
-    const identity = await requestSdk('identity.public_key');
-    const token = await window.setuDesktopRequestToken(identity);
-    if (token) await setIdentityToken(token);
+    if (await window.setuDesktopStartSso() === false) announce('Corporate sign-in was not completed.');
   } catch {
     announce('Corporate sign-in could not complete. Try signing in again.');
   }
@@ -578,26 +579,38 @@ function updatePathView(force = true) {
   if ((force || wasVisible !== ['lost','holding'].includes(state.rejoin)) && state.view === 'workspace' && !state.inTray) render();
 }
 
+let resyncing = false;
+const heldEvents = [];
+
 async function resync() {
+  if (resyncing) return;
+  resyncing = true;
   const current = state.session;
   for (const item of outages.values()) clearTimeout(item.timer);
   outages.clear();
   updatePathView();
-  void refreshDirectory();
-  if (!hasDesktopRpc || !current) return;
   try {
-    const result = await requestSdk('session.list');
-    if (state.session === current && Array.isArray(result?.sessions) && !result.sessions.some(item => item.session_id === current.rpcId)) {
-      state.session = null;
-      clearPath();
-      render();
-    }
-  } catch { announce('Could not refresh the session list.'); }
+    const lists = [refreshDirectory()];
+    if (hasDesktopRpc && current) lists.push(requestSdk('session.list').then(result => {
+      if (state.session === current && Array.isArray(result?.sessions) && !result.sessions.some(item => item.session_id === current.rpcId)) {
+        state.session = null;
+        clearPath();
+        render();
+      }
+    }, () => announce('Could not refresh the session list.')));
+    await Promise.all(lists);
+  } finally {
+    // P21: events that arrived during the resync are applied only after the lists are current.
+    resyncing = false;
+    for (const held of heldEvents.splice(0)) receiveEvent(held);
+  }
 }
 
 function receiveEvent(input) {
   if (input?.method === 'events.dropped') return void resync();
+  if (resyncing) return void heldEvents.push(input);
   const event = input?.method === 'event' ? input.params : input;
+  if (event?.type === 'token_updated') return credentialUpdated();
   const session = state.session;
   if (!session || event?.session !== session.rpcId) return;
   const {type, fields = {}} = event;
@@ -605,10 +618,11 @@ function receiveEvent(input) {
     state.recoverDevice = session.id;
     state.session = null;
     clearPath();
+    state.peerReason = type === 'peer_closed' && typeof fields.peer_reason === 'string' ? fields.peer_reason : '';
     if (type !== 'session_down') {
       state.error = type === 'session_expired' ? -32025 : -32026;
       state.view = 'workspace';
-    }
+    } else announce(fields.error ? 'The session ended unexpectedly. Choose the device to reconnect.' : 'The session ended.');
     render();
     return;
   }
@@ -869,7 +883,6 @@ function setRejoinStage(stage) {
 }
 
 window.setuDesktopEvent=receiveEvent;
-window.setuDesktopSetToken=setIdentityToken;
 window.setuDesktopSessionDeadline=setSessionDeadline;
 window.setuDesktopStartupArguments=()=>state.settings.label?['--label',state.settings.label]:[];
 try { state.settings.label=(localStorage.getItem('setu.computer-name')||'').slice(0,64); } catch { /* File preview storage can be disabled. */ }
@@ -907,7 +920,7 @@ document.addEventListener('click', async event => {
       chooseMode(value); break;
     case 'sso': ssoDialog(); break;
     case 'sso-return':
-      try { await setIdentityToken('fixture-token'); } catch { announce('The daemon rejected the credential.'); }
+      try { await requestSdk('auth.set_token', {token:'fixture-token'}); credentialUpdated(); } catch { announce('The daemon rejected the credential.'); }
       break;
     case 'refresh-presence': void refreshDirectory(); break;
     case 'cancel-connect': void cancelPending(); break;

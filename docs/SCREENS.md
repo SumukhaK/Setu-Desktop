@@ -34,7 +34,11 @@ Setu                          Prototype scenarios
 
 A native test host can provide `window.setuDesktopRpc(method, params, requestId?)` before load. Return decoded daemon results or reject with a numeric RPC `code`. Use the supplied ID on the same IPC connection for `session.cancel`. Forward daemon notifications to `window.setuDesktopEvent(notification)`.
 
-The optional `window.setuDesktopRequestToken(identity)` performs organization SSO. The returned JWT goes through `auth.set_token`; native refresh may also call `window.setuDesktopSetToken(token)`. `window.setuDesktopStartupArguments()` supplies Computer name as separate `--label` arguments. Supply ADB observations through `window.setuDesktopAdbStatus({adb_addr,status})`. `window.setuDesktopSessionDeadline({session_id,expires_at})` accepts only authoritative session deadlines. Standalone operation uses labeled fixtures.
+**Allowed methods.** A production host forwards only the v1.1.0 methods these screens bind and rejects everything else with `-32601`: `version`, `doctor`, `devices.list`, `devices.presence`, `devices.forget`, `session.connect`, `session.list`, `session.stop`, `session.cancel`, `session.pair_adb`, `events.subscribe`, `audit.report` and `audit.verify`. `auth.set_token` is not on the page's list.
+
+**Credentials stay native.** The page never receives an OIDC token, a Setu JWT or the daemon IPC secret. The optional `window.setuDesktopStartSso()` asks the native host to run organization SSO in the system browser. The host exchanges the result for a Setu JWT, then applies it with `auth.set_token` or by rewriting the daemon's `--identity-file`. It resolves `false` if the user abandons sign-in. The page learns of the rotation only from the forwarded `token_updated` event. A production host must keep credentials and process execution behind its trusted native boundary.
+
+`window.setuDesktopStartupArguments()` supplies Computer name as separate `--label` arguments. Supply ADB observations through `window.setuDesktopAdbStatus({adb_addr,status})`. `window.setuDesktopSessionDeadline({session_id,expires_at})` accepts only an authoritative session deadline. The SDK provides none in v1.1.0, and a credential's `expires_at` must never be passed here. Standalone operation uses labeled fixtures.
 
 ```mermaid
 flowchart LR
