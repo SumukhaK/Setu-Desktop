@@ -398,3 +398,126 @@ async fn dropping_the_supervisor_without_stop_keeps_the_daemon_reachable() {
     cleanup.stop().await;
     b.stop().await;
 }
+
+/// Best-effort kill of a daemon by pid, for tests that no longer own a
+/// `Child` handle (P17 cleanup).
+fn kill_pid(pid: u32) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+    }
+}
+
+/// Acceptance P17: the daemon outlives the app's whole runtime, not just
+/// the `Supervisor` handle, and the next start (a new app process) attaches.
+#[test]
+fn p17_daemon_survives_runtime_shutdown() {
+    let _env = lock_fake_env();
+    let tmp = tempfile::tempdir().unwrap();
+    let app_data = tmp.path().to_path_buf();
+    let state_dir = Workspace::Solo.state_dir(&app_data);
+
+    // First runtime: spawn the daemon, reach Ready, drop the handle, and
+    // then drop the runtime itself, as an app exit would.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let supervisor =
+            Supervisor::start(Workspace::Solo, app_data.clone(), config(), fast_options());
+        let mut rx = supervisor.subscribe();
+        wait_ready(&mut rx).await;
+        drop(supervisor);
+    });
+    drop(runtime);
+
+    // With no runtime alive, the recorded daemon must still accept
+    // connections.
+    let record = read_attach_record(&state_dir).expect("attach record written");
+    std::net::TcpStream::connect_timeout(&record.listen, Duration::from_secs(1))
+        .expect("daemon reachable after runtime shutdown");
+
+    // A second fresh runtime (a new app process) attaches to the same daemon.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let supervisor =
+            Supervisor::start(Workspace::Solo, app_data.clone(), config(), fast_options());
+        let mut rx = supervisor.subscribe();
+        let (_, _, pid, attached) = wait_ready(&mut rx).await;
+        assert!(attached);
+        assert_eq!(pid, record.pid);
+        drop(supervisor);
+    });
+    drop(runtime);
+
+    // Cleanup: we no longer own a Child handle, so kill by pid and wait
+    // until the port really refuses connections.
+    kill_pid(record.pid);
+    for _ in 0..20 {
+        if std::net::TcpStream::connect_timeout(&record.listen, Duration::from_millis(200)).is_err()
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("the daemon was still reachable after the cleanup kill");
+}
+
+/// Acceptance P18 (AD-7): a corrupted record pointing outside loopback is
+/// treated as stale — the token is never sent to it and the supervisor
+/// spawns instead.
+#[tokio::test]
+async fn a_non_loopback_attach_record_is_treated_as_stale() {
+    let _env = lock_fake_env();
+    let tmp = tempfile::tempdir().unwrap();
+    let app_data = tmp.path().to_path_buf();
+    let state_dir = Workspace::Solo.state_dir(&app_data);
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    write_attach_record(
+        &state_dir,
+        &AttachRecord {
+            listen: "10.255.255.1:9".parse().unwrap(),
+            pid: 4242,
+            version: "1.1.0".into(),
+        },
+    )
+    .unwrap();
+    std::fs::write(
+        state_dir.join("daemon.token"),
+        format!("{}\n", "t".repeat(64)),
+    )
+    .unwrap();
+
+    // A long ready_timeout makes a real attach attempt visible: it would
+    // push the Ready state past the 2 s bound.
+    let options = SupervisorOptions {
+        ready_timeout: Duration::from_secs(3),
+        ..fast_options()
+    };
+    let started = std::time::Instant::now();
+    let supervisor = Supervisor::start(Workspace::Solo, app_data.clone(), config(), options);
+    let mut rx = supervisor.subscribe();
+    let (_, _, pid, attached) = wait_ready(&mut rx).await;
+    assert!(!attached);
+    assert_ne!(pid, 4242);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "attach wasted {:?}, so the record's address was contacted",
+        started.elapsed()
+    );
+
+    supervisor.stop().await;
+}
