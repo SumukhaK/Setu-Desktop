@@ -1,4 +1,4 @@
-﻿//! RPC client behaviour for DT-01: concurrency, busy retry, notifications
+//! RPC client behaviour for DT-01: concurrency, busy retry, notifications
 //! and disconnect semantics, against a fake daemon. Error-table mapping
 //! lives in `error_mapping.rs`, framing edge cases in `framing.rs`.
 
@@ -9,8 +9,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use setu_desktop::rpc::{Notification, RpcClient, SetuError, VersionInfo, MAX_LINE_BYTES};
 use support::fake_daemon::FakeDaemon;
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -112,7 +113,7 @@ async fn eof_while_call_is_pending_fails_the_pending_call_and_every_later_call()
         let client = client.clone();
         tokio::spawn(async move { client.call("m", None).await })
     };
-    sleep(Duration::from_millis(100)).await; // let the request reach the fake
+    fake.wait_for_requests(1).await; // let the request reach the fake
     fake.close().await;
     let pending = timeout(TEST_TIMEOUT, pending)
         .await
@@ -139,7 +140,7 @@ async fn oversize_incoming_line_disconnects_pending_and_later_calls() {
         let client = client.clone();
         tokio::spawn(async move { client.call("m", None).await })
     };
-    sleep(Duration::from_millis(100)).await;
+    fake.wait_for_requests(1).await;
     let mut line = vec![b'a'; MAX_LINE_BYTES + 1];
     line.push(b'\n');
     fake.send_raw(&line).await;
@@ -168,7 +169,7 @@ async fn response_with_an_unknown_id_is_ignored() {
         let client = client.clone();
         tokio::spawn(async move { client.call("m", None).await })
     };
-    sleep(Duration::from_millis(50)).await; // let the request reach the fake
+    fake.wait_for_requests(1).await; // let the request reach the fake
     let stray = json!({ "jsonrpc": "2.0", "id": 999, "result": { "bogus": true } });
     fake.send_raw(format!("{stray}\n").as_bytes()).await;
     let result = timeout(TEST_TIMEOUT, pending)
@@ -250,4 +251,40 @@ async fn auth_error_output_does_not_contain_the_token() {
         "token leaked into Display"
     );
     assert_eq!(fake.received()[0]["params"]["token"], token);
+}
+
+// AD-3: dropping every client handle releases the connection.
+#[tokio::test]
+async fn dropping_every_client_handle_closes_the_connection() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (client, notifications) = RpcClient::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (mut server_side, _) = listener.accept().await.unwrap();
+    let extra = client.clone();
+    drop(client);
+    drop(extra);
+    drop(notifications);
+    let mut byte = [0u8; 1];
+    let read = timeout(TEST_TIMEOUT, server_side.read(&mut byte)).await;
+    assert!(
+        matches!(read, Ok(Ok(0))),
+        "connection still open after the last handle dropped"
+    );
+}
+
+// AD-3: a surviving clone keeps the connection usable; only the last
+// handle dropping may close it.
+#[tokio::test]
+async fn the_connection_stays_open_while_a_clone_is_alive() {
+    let (fake, client, notifications) = connect_fake().await;
+    fake.reply_with("m", json!({ "ok": true }));
+    let survivor = client.clone();
+    drop(client);
+    drop(notifications);
+    let result = timeout(TEST_TIMEOUT, survivor.call("m", None))
+        .await
+        .expect("call finishes")
+        .unwrap();
+    assert_eq!(result, json!({ "ok": true }));
 }

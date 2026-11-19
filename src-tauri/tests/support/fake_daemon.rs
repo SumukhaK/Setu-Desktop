@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::time::Duration;
+use tokio::time::{timeout, Duration};
 
 /// One scripted reply: a result or an error object, sent after an optional delay.
 struct Scripted {
@@ -62,6 +62,21 @@ impl FakeDaemon {
     /// Every request received so far, as parsed JSON-RPC request objects.
     pub fn received(&self) -> Vec<Value> {
         self.state.received.lock().expect("received log").clone()
+    }
+
+    /// Wait until at least `count` requests have arrived, instead of guessing
+    /// a sleep long enough for the client's frames to reach the fake.
+    pub async fn wait_for_requests(&self, count: usize) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if self.state.received.lock().expect("received log").len() >= count {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("fake received the expected requests in time");
     }
 
     /// Reply to the next request with this method using its own id.
