@@ -1,83 +1,157 @@
-# Builder prompt · DT-02 · Daemon supervisor and workspaces
+# Builder prompt · DT-03a · App shell and UI scaffold
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
-1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-7; AD-6 and AD-7 are new for this ticket).
-2. `docs/TDD_TICKETS.md` §5 "DT-02".
-3. `docs/JOURNEYS.md` rows P17 and P18.
-4. Setu-SDK v1.1.0 `API_SPEC.md` §2 (transport, ready line, startup flags): https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
-5. The daemon's own flag parsing, ready line and token file, as ground truth: `core/internal/daemon/cmd.go` at tag `v1.1.0`.
-6. Existing code you will use, not change: `src-tauri/src/rpc/` (`RpcClient`, `SetuError`).
+1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-9; AD-8 and AD-9 are new for this ticket).
+2. `docs/TDD_TICKETS.md` §4 (stack) and §5 "DT-03a".
+3. `docs/SCREENS.md`: the layout at the top and the status strip ("listener, local ADB and transport as independent facts"). This ticket shows only the daemon fact.
+4. Tauri v2 docs for `tauri.conf.json`, capabilities and `tauri-plugin-single-instance`: https://v2.tauri.app
+5. Existing code you'll use but not change: `src-tauri/src/daemon/` (`Supervisor`, `DaemonState`, `Workspace`, `DaemonConfig`) and `src-tauri/src/rpc/`.
 
 ## 1. Goal
 
-A Rust supervisor that runs one `setu-daemon` per workspace. It spawns the daemon with the right flags, reads the single `daemon_ready` line, reads the token file and authenticates. It attaches to an already-running daemon for the same workspace instead of starting a second one, restarts the daemon with backoff when it exits, and publishes its state so later tickets can re-list sessions. There is no Tauri, no UI, no sidecar bundling (AD-6) and no events subscription (DT-03).
+`cargo tauri dev` opens one window titled "Setu". The app starts the Solo daemon supervisor and shows a one-line daemon status that updates live. A second launch focuses the first window instead of starting another app. The repo gets the UI toolchain and gates that every later desktop ticket builds on. There's no sidecar bundling (DT-17), no events subscription (DT-03b), no pairing, no tray, no settings UI, and the prototype is untouched.
 
 ## 2. Files (create or change only these)
 
 ```
-src-tauri/Cargo.toml                         add tokio "process" feature; [[bin]] for the test daemon (below); dev-dep tempfile
-src-tauri/src/lib.rs                         add `pub mod daemon;`
-src-tauri/src/daemon/mod.rs                  re-exports
-src-tauri/src/daemon/workspace.rs            Workspace (solo | corporate slug), state dir paths, attach record read/write
-src-tauri/src/daemon/config.rs               DaemonConfig + to_args() (start flags)
-src-tauri/src/daemon/ready_line.rs           parse/validate the daemon_ready line
-src-tauri/src/daemon/supervisor.rs           spawn / attach / auth / restart-with-backoff / stop; state watch
-src-tauri/tests/support/fake_setu_daemon.rs  test-only executable that behaves like setu-daemon (see §3)
-src-tauri/tests/daemon_supervisor.rs         integration tests
+.gitignore                         + node_modules/, dist/, src-tauri/gen/
+package.json, package-lock.json    scripts: dev, build, tauri, typecheck, lint, format:check, test
+tsconfig.json                      strict: true, noUncheckedIndexedAccess: true, jsx react-jsx
+vite.config.ts                     root "src", build.outDir "../dist" (emptyOutDir), server.port 5173 strictPort, Vitest: environment jsdom, setupFiles
+eslint.config.js                   flat config: @eslint/js recommended + typescript-eslint strictTypeChecked + react-hooks; "@typescript-eslint/no-explicit-any": "error"; ignore dist, src-tauri, index.html, prototype.js, styles.css, docs
+.prettierrc.json, .prettierignore  ignore the prototype files, docs/, src-tauri/, dist/
+src/index.html                     Vite entry (title "Setu")
+src/main.tsx                       createRoot → <App port={tauriDaemonPort} />
+src/App.tsx                        "Setu" heading + <StatusStrip />
+src/daemon/status.ts               DaemonStatus type, statusLabel(), useDaemonStatus(port)
+src/daemon/StatusStrip.tsx
+src/platform/tauri.ts              the only file that imports @tauri-apps/api (AD-9): tauriDaemonPort
+src/test/setup.ts                  @testing-library/jest-dom
+src/daemon/status.test.ts
+src/daemon/StatusStrip.test.tsx
+src-tauri/Cargo.toml               + tauri 2, tauri-plugin-single-instance 2, [build-dependencies] tauri-build 2; [lib] name setu_desktop; [[bin]] setu-desktop (src/main.rs); default-run = "setu-desktop"; keep fake-setu-daemon bin
+src-tauri/build.rs                 tauri_build::build()
+src-tauri/tauri.conf.json          productName Setu, identifier dev.setu.desktop, one window "Setu", frontendDist ../dist, devUrl http://localhost:5173, beforeDevCommand/beforeBuildCommand npm scripts, strict CSP (below), NO bundle.externalBin
+src-tauri/capabilities/default.json   main window: core:default only
+src-tauri/icons/*                  generated with `npx tauri icon` from one placeholder PNG (commit the generated set)
+src-tauri/src/main.rs              thin: setu_desktop::app::run()
+src-tauri/src/lib.rs               + pub mod app;
+src-tauri/src/app/mod.rs           run(): builder, single-instance, setup (resolve config, start supervisor, forward state), command
+src-tauri/src/app/status.rs        AppStatus + mapping + resolution helpers (pure, unit-tested)
 ```
 
-Unit tests for the pure parts (`workspace`, `config`, `ready_line`, backoff) can live in `#[cfg(test)] mod tests` in those files.
+Don't change `src-tauri/src/daemon/`, `src-tauri/src/rpc/`, their tests, `docs/`, `README.md` or the prototype (`index.html`, `prototype.js`, `styles.css`).
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**Workspace (`workspace.rs`).**
-- `enum Workspace { Solo, Corporate { org_slug: String } }`. Use `Workspace::corporate(slug) -> Result<Workspace, SetuError>` to accept only `[a-z0-9-]{1,63}`, not starting with `-`. Anything else (`""`, `"../x"`, `"Acme"`, `"a/b"`) is rejected.
-- `fn state_dir(&self, app_data: &Path) -> PathBuf`: `<app_data>/setu/solo` or `<app_data>/setu/corp/<org_slug>`. Create the directory when spawning, not here.
-- The attach record (AD-7) is `<state_dir>/desktop-daemon.json` = `{"listen": "127.0.0.1:NNNN", "pid": N, "version": "1.1.0"}`. Write it atomically (temp file in the same dir, then rename) after a successful spawn and auth. Reading a missing or malformed record returns `None`. It never contains the token.
+**Pure core (`app/status.rs`).**
 
-**Config (`config.rs`).**
-- `DaemonConfig { daemon_path: PathBuf, relay: String, label: Option<String>, adb_path: Option<PathBuf>, relay_pin: Option<String>, proxy: Option<String>, corporate: Option<CorporateFlags { identity_file: PathBuf, policy_file: PathBuf }> }`.
-- `fn to_args(&self, state_dir: &Path) -> Vec<OsString>` returns exactly, in this order: `--listen 127.0.0.1:0 --state <dir> --relay <url>`, then `--label <name>` and `--adb <path>` when set, `--relay-pin <hex>` and `--proxy <url>` when set, and `--mode corporate --identity-file <f> --policy <p>` when corporate. Never add `--stdio` and never add `--mode solo` (it's the default).
-- `DaemonConfig` must not derive `Debug` (the proxy URL can carry credentials, AD-5).
+```rust
+#[derive(Clone, Serialize, PartialEq, Debug)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AppStatus {
+    NotConfigured,                                   // no relay URL (AD-8)
+    Starting,
+    Ready { version: Option<String>, attached: bool, generation: u64 },
+    Restarting { attempt: u32, retry_in_ms: u64 },
+    Failed { reason: String },
+    Stopped,
+}
 
-**Ready line (`ready_line.rs`).**
-- `struct ReadyLine { listen: SocketAddr, version: String, token_file: PathBuf, pid: u32 }` and `fn parse(line: &str) -> Result<ReadyLine, SetuError>`.
-- Reject with `SetuError::UnexpectedResult`: invalid JSON, `event != "daemon_ready"`, a non-loopback `listen`, or a version below 1.1.0 (compare the numeric major.minor.patch triple; a prerelease suffix after `-` is ignored).
+pub fn status_of(state: &DaemonState, version: Option<String>) -> AppStatus;
+pub fn resolve_daemon_path(env_override: Option<OsString>, exe_dir: &Path) -> PathBuf;   // env wins; else exe_dir/"setu-daemon" (+ ".exe" on Windows via std::env::consts::EXE_SUFFIX)
+pub fn resolve_relay(runtime: Option<String>, compile_time: Option<&'static str>) -> Option<String>;  // first non-blank, trimmed
+```
 
-**Supervisor (`supervisor.rs`).**
-- `Supervisor::start(workspace: Workspace, app_data: PathBuf, config: DaemonConfig, options: SupervisorOptions) -> Supervisor` returns immediately and does its work on a spawned task. `SupervisorOptions { ready_timeout: Duration (default 10 s), backoff_base: Duration (default 500 ms), backoff_max: Duration (default 30 s) }` implements `Default`. Tests pass small values.
-- `fn subscribe(&self) -> tokio::sync::watch::Receiver<DaemonState>` where `enum DaemonState { Starting, Ready { client: RpcClient, generation: u64, pid: u32, attached: bool }, Restarting { attempt: u32, retry_in: Duration }, Failed { reason: String }, Stopped }`. `generation` starts at 1 and increases by 1 on every new Ready. DT-03 re-lists sessions when it changes (P18).
-- **Startup:** read the attach record. If there is one, connect to its `listen`, read `<state_dir>/daemon.token` (trim whitespace) and `auth`. If both succeed, publish `Ready { attached: true }` and don't spawn. Otherwise spawn: create the state dir, run `daemon_path` with `to_args`, stdin null, stderr null (never read or log it), stdout piped. Read the **first** stdout line within `ready_timeout`, `parse` it, then keep draining stdout in the background and discard it. Read `token_file` from the ready line, connect to `listen`, `auth`, write the attach record and publish `Ready { attached: false }`.
-- **Crash / exit (spawned daemon):** when the child exits unexpectedly, publish `Restarting { attempt, retry_in }`, wait `retry_in`, then spawn again. Delay is `min(backoff_base * 2^(attempt-1), backoff_max)`, as a pure `fn restart_delay(attempt, base, max)`. `attempt` resets to 0 after a Ready. A ready-line timeout or parse failure kills that child and counts as a failed attempt. After 5 consecutive failed attempts, publish `Failed { reason }` and stop retrying. The reason names the step, for example "daemon did not print daemon_ready within 10s", and never contains a token or the proxy URL.
-- **Attached daemon goes away:** when the attached connection's notification channel ends (EOF), treat it like a crash of a daemon we don't own: go through the same Restarting path, which re-reads the attach record and then spawns.
-- `async fn stop(&self)`: if this supervisor spawned the daemon, kill the child and wait for it. If it only attached, just drop the client. Remove the attach record only if this supervisor spawned that pid. Publish `Stopped`. Dropping a `Supervisor` without `stop()` must **not** kill the daemon. P17: the daemon outlives the window, and the next start attaches.
-- Read the token only in Rust. Never put it in `DaemonState`, errors, `Debug` output or the attach record.
+`AppStatus` must never carry the token, the proxy URL or a pairing code. `Failed.reason` is passed through from the supervisor, which already keeps secrets out. `Debug` is fine here because the type holds no secrets.
 
-**Test daemon (`tests/support/fake_setu_daemon.rs`, a `[[bin]]` named `fake-setu-daemon` with `test = false`, `doc = false`).** It's a small, real executable (keep it under ~150 lines) that integration tests reach through `env!("CARGO_BIN_EXE_fake-setu-daemon")`.
-- It accepts the real flags (ignoring unknown ones) and binds `--listen`. It writes a random token to `<state>/daemon.token` unless one exists, and prints exactly one `daemon_ready` line with its real pid.
-- It serves newline JSON-RPC: `auth` (must come first, else `-32001`), `version` → `{"version":"1.1.0","mode":"solo","audit":false}`, `session.list` → `{"sessions":[]}`.
-- Env knobs for tests only: `FAKE_DAEMON_EXIT_AFTER_MS` (exit with code 1 after N ms), `FAKE_DAEMON_NO_READY=1` (bind but never print the ready line), and `FAKE_DAEMON_ARGS_FILE=<path>` (write its argv as JSON lines to that file so tests can assert the flags).
-- Use only crates already in `[dependencies]` (tokio, serde_json). It may reuse `setu_desktop::rpc::{LineDecoder, encode}`.
+**`app/mod.rs`.**
+- `pub fn run()`: `tauri::Builder::default()`.
+  - Register `.plugin(tauri_plugin_single_instance::init(|app, _, _| focus the "main" window))` first.
+  - Register `.invoke_handler(generate_handler![daemon_status])`.
+  - In `.setup(...)`:
+    1. Resolve the relay with `resolve_relay(std::env::var("SETU_RELAY_URL").ok(), option_env!("SETU_RELAY_URL"))`.
+    2. With no relay, store `NotConfigured` and start nothing.
+    3. Otherwise build a `DaemonConfig` with:
+       - `daemon_path = resolve_daemon_path(env::var_os("SETU_DAEMON_PATH"), <current_exe dir>)`
+       - `relay`
+       - `label = Some(<computer name>)`. Use the `COMPUTERNAME` or `HOSTNAME` env var, else `None`. Add no crate for this.
+       - every other field `None`
+    4. Then `Supervisor::start(Workspace::Solo, app.path().app_data_dir()?, config, SupervisorOptions::default())`.
+- **State forwarding.** Spawn one async task on Tauri's runtime (`tauri::async_runtime::spawn`) that loops over `subscribe()` changes:
+  - For a `Ready` with a new `generation`, call `client.version()` once and keep `Some(version)` on success.
+  - Map with `status_of`, store the result in a `Mutex<AppStatus>` held in managed state, and `emit("daemon-status", &status)`.
+- `#[tauri::command] fn daemon_status(state) -> AppStatus` returns the stored value, so a UI that loads late still gets the current state.
+- Don't call `stop()` on window close or app exit. The daemon outlives the window (P17; DT-09 adds tray and quit).
+- Keep the `Supervisor` handle in managed state so it lives as long as the app.
+
+**`tauri.conf.json` CSP.** Set `"csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self'; img-src 'self'"`. Leave `withGlobalTauri` false.
+
+**UI (AD-9).**
+
+```ts
+export type DaemonStatus =
+  | { state: "not_configured" } | { state: "starting" }
+  | { state: "ready"; version: string | null; attached: boolean; generation: number }
+  | { state: "restarting"; attempt: number; retry_in_ms: number }
+  | { state: "failed"; reason: string } | { state: "stopped" };
+
+export interface DaemonPort {
+  current(): Promise<DaemonStatus>;
+  subscribe(onStatus: (s: DaemonStatus) => void): Promise<() => void>;   // returns unsubscribe
+}
+```
+
+- `useDaemonStatus(port)` returns `DaemonStatus | null`:
+  - It reads `current()` once and subscribes.
+  - A pushed status always wins over a late `current()` result.
+  - It unsubscribes on unmount.
+- `statusLabel(s)` returns:
+  - "No relay configured"
+  - "Starting the Setu service…"
+  - "Setu service ready · v1.1.0" (when `version` is null, show "Setu service ready")
+  - "Restarting the Setu service (attempt N) in X s", where X = ceil(ms / 1000)
+  - "Setu service failed: <reason>"
+  - "Setu service stopped"
+- `StatusStrip` renders `statusLabel` in a `role="status"` element, showing "Checking…" while the status is null.
+- `src/platform/tauri.ts` implements `DaemonPort` with `invoke("daemon_status")` and `listen("daemon-status")`. No other file imports `@tauri-apps/api`.
+- Plain CSS is fine. No UI library, no router and no state library.
+
+**Package scripts.**
+
+```
+"dev": "vite", "build": "tsc --noEmit && vite build", "tauri": "tauri",
+"typecheck": "tsc --noEmit", "lint": "eslint .", "format:check": "prettier --check .", "test": "vitest run"
+```
 
 ## 4. TDD: write these tests first, see them fail, then implement
 
-Map each test to its acceptance ID in a comment. Wrap every await in a timeout (5 s), and use `tempfile` dirs. Don't use bare sleeps to wait for state: await the `watch` receiver with `wait_for`.
-
-- **Workspace:** solo and corporate paths; the invalid slugs above are rejected; the attach record round-trips, a malformed record reads as `None`, and the written file contains no `token`.
-- **Config:** exact argv for solo-minimal, solo-with-label-adb-pin-proxy and corporate. There is no `--stdio` and no `--mode solo`.
-- **Ready line:** a valid line parses. Wrong event, `listen: "0.0.0.0:1"`, malformed JSON and `version: "1.0.4"` are rejected; `"1.1.0-rc1"` and `"1.2.0"` are accepted.
-- **Backoff:** `restart_delay` gives 500 ms, 1 s, 2 s, … and caps at max.
-- **P18 spawn:** the supervisor spawns the fake, reaches `Ready { generation: 1, attached: false }`, and `client.version()` works. The attach record exists with the fake's pid. The fake's argv file shows `--listen 127.0.0.1:0` and the workspace `--state` dir.
-- **P18 attach:** with supervisor A Ready, supervisor B for the same workspace and app_data reaches `Ready { attached: true }` with the **same pid**, and no second process was started (the args file has one line).
-- **P18 stale record:** an attach record pointing at a closed port leads to a fresh spawn and `attached: false`.
-- **P18 crash and restart:** with `FAKE_DAEMON_EXIT_AFTER_MS=300` on the first run only (for example, through a marker file the fake checks), the state goes Ready gen 1 → Restarting attempt 1 → Ready gen 2 with a **different pid**.
-- **Ready timeout:** with `FAKE_DAEMON_NO_READY=1`, `ready_timeout = 300 ms` and `backoff_base = 10 ms`, it ends in `Failed` after 5 attempts. The reason mentions `daemon_ready` and no fake process is left running (each child was killed).
-- **P17 stop and drop:** `stop()` on the spawning supervisor kills the child (its port refuses connections afterwards), removes the attach record and publishes `Stopped`. Separately, dropping a Ready supervisor without `stop()` leaves the daemon reachable. A new supervisor then attaches (clean it up at the end with `stop()` from a supervisor that owns it, or kill the pid).
+- **Rust (`app/status.rs` unit tests):**
+  - `status_of` covers every `DaemonState` variant: `Ready` keeps `attached`, `generation` and the version passed in, and `Restarting` converts `retry_in` to ms.
+  - `serde_json::to_value(AppStatus::Ready{..})` has `"state":"ready"`. Assert the JSON field names the UI relies on.
+  - `resolve_daemon_path` prefers the env value, and otherwise returns `exe_dir.join("setu-daemon" + EXE_SUFFIX)`.
+  - `resolve_relay`: runtime wins, blank or whitespace values are skipped, compile-time is the fallback, and both missing give `None`.
+  - Build a `Ready` value with a real `RpcClient` from the existing `FakeDaemon` pattern. If that needs the integration-test support module, put the `status_of` test for `Ready` in `src-tauri/tests/app_status.rs` and use `tests/support/fake_daemon.rs` (adding the file to §2 is allowed for this one test).
+- **UI (Vitest + Testing Library, with a fake `DaemonPort`):**
+  - `statusLabel` table for all six states, including null version and the ceil of 2500 ms.
+  - `useDaemonStatus`:
+    - `current()` resolves "starting", then a pushed "ready" shows ready.
+    - A pushed status that arrives **before** a slow `current()` isn't overwritten by it.
+    - Unmount calls the unsubscribe function.
+  - `StatusStrip` shows "Checking…" first, then the label, in `role="status"`.
+  - The rendered DOM contains no input element.
 
 ## 5. Gates (all must pass before you push)
+
+From the repo root:
+
+```
+npm ci
+npm run typecheck && npm run lint && npm run format:check && npm test && npm run build
+```
 
 From `src-tauri/`:
 
@@ -87,35 +161,42 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Tests must pass on the platform you build on. Note which OS you ran on in the PR. Avoid Unix-only APIs (signals, `/proc`); use `tokio::process::Child::kill` and connection checks.
+Also run `npm run tauri dev` once on your OS. Confirm in the PR that the window opens with the title "Setu" and the strip shows either "No relay configured" (no env) or a live state with `SETU_RELAY_URL` and `SETU_DAEMON_PATH` set. Also confirm that a second launch focuses the first window. Name the OS.
 
-## 6. Karpathy pillars (enforced at review)
+Use no `#[allow(...)]`, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, and no clippy or lint downgrades. If a gate fails for a reason you can't fix in code (for example, Tauri needing system libraries on Linux), stop and report the exact error.
 
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If the ticket, this prompt, `API_SPEC.md` and `cmd.go` disagree, stop and ask.
-2. **Simplicity first.** Write the minimum code: no Tauri, no events subscription, no session re-list (DT-03 does it from `generation`), no config file loading, no logging crate, no traits for "process launcher" abstractions. The test daemon is a real executable precisely so production code needs no seams. Keep files under ~250–300 lines.
-3. **Surgical changes.** Don't change `src/rpc/` or its tests. Touch only the files in §2. Branch from latest `main` as `feature/DT-02-daemon-supervisor`. Make atomic conventional commits (`test(desktop): …` red first, then `feat(desktop): …`).
-4. **Goal-driven TDD.** Commit the failing tests first, then the implementation. Paste the red excerpt and the full green output of all three gates in the PR.
+## 6. Architecture and Karpathy pillars (enforced at review)
+
+- **Rust/React separation.** The token, process control and daemon RPC stay in Rust. React sees only `AppStatus` through one command and one event. The UI depends on `DaemonPort`, not Tauri (AD-9).
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If Tauri v2's behaviour differs from this prompt (config keys, plugin API, icon requirements), choose the closest v2-native equivalent, record it there, and stop only if it changes the contract.
+2. **Simplicity first.** Write the minimum code: no router, no state library, no UI kit, no logging crate, no workspace switcher, no settings, and no sidecar. Keep files under ~250–300 lines, and most of them much smaller.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-03a-app-shell`. Make atomic conventional commits:
+   - `chore(desktop): …` for the toolchain scaffold (configs, package files, icons) with no behaviour
+   - `test(desktop): …` red
+   - `feat(desktop): …` green
+4. **Goal-driven TDD.** Commit the failing tests first, then the implementation. Paste the red excerpt and the full green output of every gate in the PR.
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `feat(desktop): DT-02 daemon supervisor and workspaces`, with this body:
+Open one PR against `main` titled `feat(desktop): DT-03a app shell and UI scaffold`, with this body:
 
 ```
-Ticket: DT-02 (docs/TDD_TICKETS.md §5) · Acceptance: P18, P17 (stop / survive drop)
+Ticket: DT-03a (docs/TDD_TICKETS.md §5) · Acceptance: daemon status surfaced (P18 visible), single instance, P17 (no stop on close)
 
 ## Assumptions & Trade-offs
 - …
 
 ## What changed
-- one line per file
+- one line per file (group generated icons in one line)
 
 ## Test evidence
 OS: …
 <red run excerpt>
-<full green output of cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo test>
+<full green output of every gate>
+<tauri dev manual check: window title, strip text, second launch focuses>
 
 ## Out of scope (left for later tickets)
-- Tauri shell + sidecar bundling + single-instance (DT-03), events hub and session re-list (DT-03), settings UI and restart-on-change (DT-12), tray/quit (DT-09)
+- events hub and session store (DT-03b), tray and quit (DT-09), settings incl. relay URL (DT-12), sidecar packaging (DT-17)
 ```
 
-Then **stop immediately**. Don't start DT-03, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start DT-03b, don't edit `docs/`, and don't merge.
