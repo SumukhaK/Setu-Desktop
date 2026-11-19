@@ -21,7 +21,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 // parallel tests never see each other's values; the guard clears the vars.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-struct FakeEnv(MutexGuard<'static, ()>);
+struct FakeEnv(#[allow(dead_code)] MutexGuard<'static, ()>);
 
 impl Drop for FakeEnv {
     fn drop(&mut self) {
@@ -273,7 +273,7 @@ async fn a_crashed_daemon_is_restarted_with_a_new_generation_and_pid() {
 
     let supervisor = Supervisor::start(Workspace::Solo, app_data.clone(), config(), options);
     let mut rx = supervisor.subscribe();
-    let (_, generation, pid, _) = wait_ready(&mut rx).await;
+    let (_, generation, pid_first, _) = wait_ready(&mut rx).await;
     assert_eq!(generation, 1);
 
     let restarting = wait_state(&mut rx, |s| matches!(s, DaemonState::Restarting { .. })).await;
@@ -285,9 +285,12 @@ async fn a_crashed_daemon_is_restarted_with_a_new_generation_and_pid() {
         _ => panic!("expected a Restarting state"),
     }
 
-    let (client, generation, pid, _) = wait_ready(&mut rx).await;
+    let (client, generation, pid_second, _) = wait_ready(&mut rx).await;
     assert_eq!(generation, 2);
-    assert_ne!(pid, pid, "the restarted daemon must be a new process");
+    assert_ne!(
+        pid_second, pid_first,
+        "the restarted daemon must be a new process"
+    );
     timeout(TEST_TIMEOUT, client.version())
         .await
         .expect("version in time")

@@ -171,12 +171,7 @@ async fn main() {
         let _ = stdout.flush();
     }
 
-    loop {
-        match listener.accept().await {
-            Ok((socket, _)) => {
-                tokio::spawn(handle_conn(socket, token.clone()));
-            }
-            Err(_) => break,
-        }
+    while let Ok((socket, _)) = listener.accept().await {
+        tokio::spawn(handle_conn(socket, token.clone()));
     }
 }
