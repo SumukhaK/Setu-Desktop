@@ -112,5 +112,47 @@ impl SetuError {
 
 /// Map a JSON-RPC error object (`{"code", "message", "data": {"kind"}}`) to `SetuError` (AD-2).
 pub fn from_error_object(error: &Value) -> SetuError {
-    todo!("AD-2: map by numeric code; unknown codes become Denied with the raw kind")
+    let code = error.get("code").and_then(Value::as_i64).unwrap_or(-32603);
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let kind = error
+        .get("data")
+        .and_then(|data| data.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_default();
+    match code {
+        -32700 | -32600 | -32601 | -32602 | -32603 => SetuError::Protocol { code, message },
+        -32001 => SetuError::Unauthorized,
+        -32010 => SetuError::Denied {
+            code,
+            kind,
+            message,
+        },
+        -32011 => SetuError::Unavailable,
+        -32012 => SetuError::NotPaired,
+        -32013 => SetuError::BadCode,
+        -32014 => SetuError::Revoked,
+        -32015 => SetuError::TokenInvalid,
+        -32016 => SetuError::TokenExpired,
+        -32017 => SetuError::NoGrant,
+        -32018 => SetuError::Blocked,
+        -32020 => SetuError::NoSession,
+        -32021 => SetuError::AuditDisabled,
+        -32022 => SetuError::Cancelled,
+        -32023 => SetuError::AdbPairFailed,
+        -32024 => SetuError::Unsupported,
+        -32025 => SetuError::SessionExpired,
+        -32026 => SetuError::PeerClosed,
+        -32027 => SetuError::Busy,
+        // Anything else (for example -32019, -32099) stays raw, never guessed (AD-2).
+        _ => SetuError::Denied {
+            code,
+            kind,
+            message,
+        },
+    }
 }

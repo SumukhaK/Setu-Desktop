@@ -15,7 +15,13 @@ pub const MAX_LINE_BYTES: usize = 1_048_576;
 /// Returns `SetuError::FrameTooLarge` without producing bytes when the
 /// compact encoding would exceed [`MAX_LINE_BYTES`].
 pub fn encode(value: &Value) -> Result<Vec<u8>, SetuError> {
-    todo!("compact JSON + newline, cap-checked")
+    // Serializing a `serde_json::Value` cannot fail: it is valid JSON by construction.
+    let mut bytes = serde_json::to_vec(value).expect("a serde_json::Value serializes");
+    if bytes.len() > MAX_LINE_BYTES {
+        return Err(SetuError::FrameTooLarge);
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 /// Incremental decoder that turns incoming byte chunks into complete lines.
@@ -34,6 +40,27 @@ impl LineDecoder {
     /// Empty lines are skipped. A line that grows past [`MAX_LINE_BYTES`]
     /// — with or without its newline yet — is a framing violation.
     pub fn feed(&mut self, chunk: &[u8]) -> Result<Vec<Vec<u8>>, SetuError> {
-        todo!("accumulate bytes, emit complete lines, enforce the cap")
+        let mut lines = Vec::new();
+        let mut rest = chunk;
+        while let Some(newline) = rest.iter().position(|byte| *byte == b'\n') {
+            let (head, tail) = rest.split_at(newline);
+            rest = &tail[1..];
+            self.buf.extend_from_slice(head);
+            let line = std::mem::take(&mut self.buf);
+            if line.len() > MAX_LINE_BYTES {
+                return Err(SetuError::FrameTooLarge);
+            }
+            if !line.is_empty() {
+                lines.push(line);
+            }
+        }
+        if !rest.is_empty() {
+            self.buf.extend_from_slice(rest);
+            if self.buf.len() > MAX_LINE_BYTES {
+                self.buf.clear();
+                return Err(SetuError::FrameTooLarge);
+            }
+        }
+        Ok(lines)
     }
 }
