@@ -11,8 +11,9 @@ Companion to the first architecture and UX audit against v1.0.1.
 Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobile's copy of this file.
 
 - [x] DT-01 · JSON-RPC client core · Done in [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3)
-- [ ] DT-02 · Daemon supervisor and workspaces
-- [ ] DT-03 · Event hub and session store
+- [x] DT-02 · Daemon supervisor and workspaces · Done in [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6)
+- [ ] DT-03a · App shell and UI scaffold
+- [ ] DT-03b · Event hub and session store
 - [ ] DT-04 · Solo pairing form with cancel
 - [ ] DT-05 · Local ADB adapter
 - [ ] DT-06 · Session card and status strip
@@ -26,6 +27,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [ ] DT-14 · Corporate sign-in and token rotation
 - [ ] DT-15 · Corporate device directory
 - [ ] DT-16 · Corporate recovery and end states
+- [ ] DT-17 · Packaging and daemon sidecar
 
 ---
 
@@ -183,13 +185,18 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **SDK binding:** `auth`, `version`, the error table in API_SPEC §2.3.
 
 ### DT-02 · Daemon supervisor and workspaces
-- **Files:** `src-tauri/src/daemon/supervisor.rs`, `workspace.rs` (state dir per workspace: `<app-data>/setu/solo`, `<app-data>/setu/corp/<org-slug>`), `ready_line.rs`, `config.rs` (start flags), `src-tauri/tests/support/fake_setu_daemon.rs` (test binary). The sidecar entry in `tauri.conf.json` moved to DT-03 with the app shell (CODEBASE_MEMORY AD-6).
+- **Files:** `src-tauri/src/daemon/supervisor.rs`, `workspace.rs` (state dir per workspace: `<app-data>/setu/solo`, `<app-data>/setu/corp/<org-slug>`), `ready_line.rs`, `config.rs` (start flags), `src-tauri/tests/support/fake_setu_daemon.rs` (test binary). The sidecar entry moved out of this ticket (CODEBASE_MEMORY AD-6, AD-8).
 - **Behaviour:** spawn `setu-daemon --listen 127.0.0.1:0 --state <dir> --relay <url> --label <name> --adb <path> [--relay-pin] [--proxy] [--mode corporate --identity-file <f> --policy <p>]`. Parse the one `daemon_ready` stdout line; read `token_file` in Rust only; `auth` on each connection; restart with backoff on exit; attach instead of spawning when a live daemon owns that state dir.
 - **Tests first:** P18, P17 (process survives window close).
 - **SDK binding:** daemon flags §2, `daemon_ready`, `auth`, `version`.
 
-### DT-03 · Event hub and session store
-- **Files:** Tauri v2 app shell (`src-tauri/tauri.conf.json` with sidecar `setu-daemon`, `main.rs`, single-instance plugin) and the `src/` scaffold (Vite, React, TS strict, ESLint, Prettier, Vitest), then `src-tauri/src/events/hub.rs` (dedicated events connection, `events.subscribe`), `src/state/sessionStore.ts` (reducer keyed by client session `s1…` and tunnel id), `src/state/clock.ts` (monotonic, injectable).
+### DT-03a · App shell and UI scaffold
+- **Files:** Tauri v2 app shell (`src-tauri/tauri.conf.json`, `build.rs`, `capabilities/`, `icons/`, `src/main.rs`, `src/app/`, single-instance plugin) starting the Solo supervisor and publishing its state; the `src/` scaffold (Vite, React, TS strict, ESLint, Prettier, Vitest) with one status strip. The daemon executable is resolved at runtime; bundling it as a sidecar is DT-17 (CODEBASE_MEMORY AD-8).
+- **Tests first:** daemon state → UI status mapping (no secrets), daemon path and relay resolution, status strip rendering for every state.
+- **SDK binding:** `version` (shown once Ready); supervisor `DaemonState`.
+
+### DT-03b · Event hub and session store
+- **Files:** `src-tauri/src/events/hub.rs` (dedicated events connection, `events.subscribe`), `src/state/sessionStore.ts` (reducer keyed by client session `s1…` and tunnel id), `src/state/clock.ts` (monotonic, injectable).
 - **Tests first:** P21, P17 restore, out-of-order and stale-session events ignored (part of P14).
 - **SDK binding:** `events.subscribe`, the `event` and `events.dropped` notifications, `session.list`, event types §1.5.
 
@@ -258,6 +265,11 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **Files:** `src/features/corporate/RecoveryPanel.tsx`, `endStates.ts`.
 - **Tests first:** P11 (extended), P13 (narrowed), P10 desktop half (`-32026` / `peer_closed` → "ended on the phone", no retry), P22 desktop label setting.
 - **SDK binding:** `-32014`, `-32015`, `-32016`, `-32017`, `-32018`, `-32025`, `-32026`; `session_expired` and `peer_closed` events.
+
+### DT-17 · Packaging and daemon sidecar
+- **Files:** `src-tauri/tauri.conf.json` (`bundle.externalBin: ["binaries/setu-daemon"]`), a fetch script that downloads and checksums the `setu-daemon` v1.1.0 release binary per target triple into `src-tauri/binaries/` (not committed), daemon path resolution switched to the sidecar location.
+- **Tests first:** checksum mismatch fails the fetch; the bundled app resolves the sidecar path on each OS (CI matrix or documented manual check).
+- **SDK binding:** none (release assets of `SumukhaK/Setu` v1.1.0).
 
 ---
 
