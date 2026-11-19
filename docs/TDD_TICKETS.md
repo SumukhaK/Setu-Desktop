@@ -6,6 +6,27 @@ Companion to the first architecture and UX audit against v1.0.1.
 
 > **Status in this repository.** The section 2 and section 3 baseline updates are applied in [Setu-Desktop `docs/JOURNEYS.md`](https://github.com/SumukhaK/Setu-Desktop/blob/main/docs/JOURNEYS.md) (canonical, including P01–P22) and in each repository's `docs/SCREENS.md`. The prototype fixture changes in section 2.7 are not applied yet. The same file lives in both Setu-Desktop and Setu-mobile.
 
+## Ticket status (Setu-Desktop)
+
+Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobile's copy of this file.
+
+- [ ] DT-01 · JSON-RPC client core
+- [ ] DT-02 · Daemon supervisor and workspaces
+- [ ] DT-03 · Event hub and session store
+- [ ] DT-04 · Solo pairing form with cancel
+- [ ] DT-05 · Local ADB adapter
+- [ ] DT-06 · Session card and status strip
+- [ ] DT-07 · Path and rejoin banners
+- [ ] DT-08 · Devices list, forget and nicknames (solo)
+- [ ] DT-09 · Tray and background
+- [ ] DT-10 · Android 11+ debugger pairing
+- [ ] DT-11 · Diagnostics
+- [ ] DT-12 · Settings: relay, pin, proxy
+- [ ] DT-13 · This Computer's Audit Log
+- [ ] DT-14 · Corporate sign-in and token rotation
+- [ ] DT-15 · Corporate device directory
+- [ ] DT-16 · Corporate recovery and end states
+
 ---
 
 ## 0. Verdict
