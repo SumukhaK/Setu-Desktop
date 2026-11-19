@@ -47,21 +47,32 @@ const devices = [
 const corporateFailures = {
   '-32014': ['Access revoked', 'Your access was revoked by your administrator.', 'Ask IT to review the revocation before connecting again.'],
   '-32015': ['Corporate token invalid', 'The corporate identity token could not be verified.', 'Sign in through SSO to request a fresh identity token.'],
-  '-32016': ['Corporate session expired', 'Your corporate session expired. Sign in via SSO to resume.', 'This preview shows reauthentication. Keeping existing tunnels open during refresh requires an application integration.'],
+  '-32016': ['Corporate session expired', 'Your corporate session expired. Sign in via SSO to resume.', 'SSO can rotate the daemon’s credential while existing sessions keep running.'],
   '-32017': ['No device grant', 'You don’t have access to this device. Request a grant from your IT admin.', 'Ask IT to verify your device grant, then try connecting again.'],
-  '-32018': ['Device policy blocked debugging', 'Debugging is restricted by your organization’s device policy.', 'Ask IT to review Android management policy. This is a daemon error contract fixture. v1.0.1 reports device-side blocking separately and does not guarantee this desktop error.']
+  '-32018': ['Device policy blocked debugging', 'Debugging is restricted by your organization’s device policy.', 'Ask IT to review Android management policy.'],
+  '-32025': ['Corporate session time limit reached', 'This debugging session reached its organization’s time limit.', 'Reconnect to start a new session and reauthenticate. Sign in again if your credential needs refreshing.'],
+  '-32026': ['Session ended on the phone', 'The phone ended this debugging session.', 'Choose the device to start another connection.']
 };
 
 const scenarios = [
   ['live', 'Solo debugging', 'Local ADB attached through an encrypted relay.', 'terminal'],
   ['pair', 'Pair a phone', 'Ten digits and automatic key pinning.', 'link'],
-  ['corporate', 'Corporate sign-in', 'Browser SSO and static policy devices.', 'shield'],
+  ['corporate', 'Corporate sign-in', 'Browser SSO and granted-device presence.', 'shield'],
   ['no-grant', 'Missing grant · −32017', 'A corporate user requests device access.', 'lock'],
   ['blocked', 'MDM blocked · −32018', 'Review the typed contract fixture.', 'lock'],
   ['revoked', 'Access revoked · −32014', 'An administrator has revoked access.', 'shield'],
   ['token-invalid', 'Invalid token · −32015', 'Verification failed. Sign in again.', 'shield'],
   ['token-expired', 'Expired token · −32016', 'Recover using the SSO preview.', 'shield'],
-  ['session-cap', 'Session time limit', 'Five-minute warning integration preview.', 'history'],
+  ['session-cap', 'Session time limit', 'Authoritative deadline fixture for the five-minute warning.', 'history'],
+  ['session-expired', 'Corporate session expired · −32025', 'Reconnect after the policy cap.', 'history'],
+  ['peer-closed', 'Session ended on the phone · −32026', 'Show a terminal peer close without retry.', 'phone'],
+  ['token-refresh', 'Refresh a live session', 'Rotate the identity token without dropping ADB.', 'shield'],
+  ['presence', 'Corporate presence', 'Fresh granted-device availability.', 'phone'],
+  ['presence-stale', 'Stale corporate presence', 'Expired snapshot displays Last seen unknown.', 'phone'],
+  ['wireless', 'Android system pairing', 'Pair through Setu with an optional port.', 'link'],
+  ['wireless-failed', 'Android pairing failed · −32023', 'Review the recovery for a rejected code.', 'phone'],
+  ['wireless-unsupported', 'Older phone agent · −32024', 'Prompt for a phone-side Setu update.', 'phone'],
+  ['cancel', 'Cancel a pending connection', 'Cancel only the selected daemon request.', 'refresh'],
   ['rejoin', 'Interrupted network path', 'Explore each stage of the rejoin window.', 'refresh'],
   ['unauthorized', 'ADB unauthorized', 'Android is waiting for its system trust prompt.', 'phone'],
   ['adb-offline', 'ADB offline', 'The local ADB host sees the endpoint as offline.', 'phone'],
@@ -84,7 +95,7 @@ const labels = { none: 'No local device', device: 'device', unauthorized: 'unaut
 const navItems = [['workspace', 'grid', 'Workspace'], ['devices', 'phone', 'Devices'], ['audit', 'report', 'Audit log'], ['doctor', 'terminal', 'Diagnostics'], ['settings', 'settings', 'Settings']];
 const state = {
   mode: 'solo', view: 'workspace', session: null, error: null, sso: false, rejoin: '', cap: false, stagePreview: false,
-  audit: 'verified', diagnostic: 'healthy', paired: new Set(['pixel-8-personal']), nicknames: {}, settings: { relay: '', pin: '', proxy: '' }
+  audit: 'verified', diagnostic: 'healthy', paired: new Set(['pixel-8-personal']), nicknames: {}, settings: { relay: '', pin: '', proxy: '', label: '' }, presence: null, pending: null
 };
 
 const safe = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -93,10 +104,18 @@ const button = (action, label, css = '', symbol = '', value = '') => `<button ty
 const status = (label, theme = 'neutral') => `<span class="status ${theme}"><span aria-hidden="true"></span>${safe(label)}</span>`;
 const deviceName = device => state.nicknames[device.id] || device.name;
 const workspaceName = () => state.mode === 'corporate' ? 'Northstar QA' : 'Personal workspace';
-const pairedDevices = () => devices.filter(device => device.kind === state.mode && (state.mode === 'corporate' || state.paired.has(device.id)));
-const currentDevice = () => devices.find(device => device.id === state.session?.id);
+const pairedDevices = () => state.mode === 'corporate'
+  ? (state.presence?.rows.map(entry => devices.find(device => device.id === entry.device_id) || { id: entry.device_id, name: entry.device_id, kind: 'corporate' })
+    ?? (hasDesktopRpc ? [] : devices.filter(device => device.kind === 'corporate')))
+  : hasDesktopRpc ? (state.soloRows || []).map(row => ({id:row.id, name:row.id,kind:'solo'})) : devices.filter(device => device.kind === 'solo' && state.paired.has(device.id));
+const seen = id => {
+  const row = state.presence?.rows.find(item => item.device_id === id);
+  if (typeof row?.online !== 'boolean' || performance.now() - state.presence.at >= 60000) return 'Last seen unknown';
+  return row.online ? 'Online' : 'Offline';
+};
+const currentDevice = () => state.session && (devices.find(device => device.id === state.session.id) || { id: state.session.id, name: state.session.id });
 const isAttached = () => state.session?.adb === 'device';
-const attachCommand = () => `adb connect ${endpoint}`;
+const attachCommand = () => `adb connect ${state.session?.addr || endpoint}`;
 
 function heading(title, subtitle, actions = '') {
   return `<header class="page-heading"><div><h1 tabindex="-1">${safe(title)}</h1><p>${safe(subtitle)}</p></div>${actions ? `<div class="button-row">${actions}</div>` : ''}</header>`;
@@ -126,7 +145,7 @@ function render(focus = false) {
     <nav class="rail-tools" aria-label="Support and preferences">${navItems.slice(3).map(railButton).join('')}</nav>
   </aside><main id="main" class="main-pane" tabindex="-1">
     <div class="main-inner">${view()}</div>
-    <footer class="app-status"><span>${status(hasDesktopRpc ? 'Desktop adapter supplied' : 'Offline fixtures')}</span><span>Setu SDK v1.0.1</span></footer>
+    <footer class="app-status"><span>${status(hasDesktopRpc ? 'Desktop adapter supplied' : 'Offline fixtures')}</span><span>Setu-SDK v1.1.0 · 921aded</span></footer>
   </main>`;
   if (focus) shell.querySelector('h1').focus();
 }
@@ -134,8 +153,7 @@ function render(focus = false) {
 function transport() {
   if (state.rejoin === 'lost') return 'Path unavailable';
   if (state.session?.path === 'lan') return 'Direct LAN';
-  if (state.session?.path === 'relay-wss') return 'Encrypted Relay WSS';
-  return state.session ? 'Awaiting verified stream' : '—';
+  return ({'relay-wss':'Encrypted Relay WSS', 'relay-ws':'Relay WS', 'relay-tcp':'Relay TCP'})[state.session?.path] || (state.session ? 'Path unknown' : '—');
 }
 
 function auditScope() {
@@ -149,7 +167,7 @@ function signalStrip() {
   const adb = state.session?.adb || 'none';
   return `<div class="signal-strip" aria-label="Session status">
     <div><small>TRANSPORT PATH</small><strong>${transport()}</strong></div>
-    <div><small>LOCAL ENDPOINT</small><code>${state.session ? endpoint : '—'}</code></div>
+    <div><small>LOCAL ENDPOINT</small><code>${state.session ? safe(state.session.addr) : '—'}</code></div>
     <div><small>LOCAL ADB HOST</small>${status(labels[adb], adb === 'device' ? 'good' : adb === 'none' ? 'neutral' : 'warning')}</div>
     <div><small>AUDIT SCOPE</small><strong>${auditScope()}</strong></div>
   </div>`;
@@ -161,7 +179,7 @@ function corporateIssue(error = state.error) {
   return `<section class="card standard-card error-card">
     <div class="feature-icon">${icon('shield', 25)}</div>
     <h2>${title} <code>${error}</code></h2><p><strong>${message}</strong></p><p class="muted">${fix}</p>
-    <div class="button-row">${recovering ? button('sso', 'Sign in via SSO', 'primary', 'arrow') : button('admin', 'Contact IT administrator', 'secondary', 'help')}
+    <div class="button-row">${recovering ? button('sso', 'Sign in via SSO', 'primary', 'arrow') : [-32025, -32026].includes(error) ? button('recover-session', 'Reconnect', 'secondary', 'refresh') : button('admin', 'Contact IT administrator', 'secondary', 'help')}
     ${error === -32017 ? button('clear-error', 'Back to devices', 'quiet') : ''}</div>
   </section>`;
 }
@@ -170,23 +188,23 @@ function corporateSignIn() {
   return `<section class="card standard-card identity-card"><div class="feature-icon">${icon('shield', 24)}</div>
     <h2>Sign in with your organization</h2>
     <p class="muted">The browser sign-in adapter hands the file-backed Ed25519 public key from <code>identity.public_key</code> to your organization’s token issuer. The issuer and key binding are app integration work.</p>
-    ${button('sso', 'Sign in via SSO', 'primary', 'arrow')}${status('Integration preview')}</section>`;
+    ${button('sso', 'Sign in via SSO', 'primary', 'arrow')}${!hasDesktopRpc ? status('SSO fixture') : ''}</section>`;
 }
 
 function rejoinNotice() {
-  if (state.rejoin === 'holding') return `<p class="notice warning banner" role="status">${icon('refresh', 18)}<span><strong>Holding session while phone reconnects.</strong> Your debugger stays attached while Setu attempts to rejoin this stream.</span></p>`;
-  if (state.rejoin === 'lost') return `<p class="notice warning banner" role="status">${icon('info', 18)}<span><strong>Phone unreachable.</strong> This stream’s rejoin window ended. Session recovery can still retry where configured. Your debugger will need to reattach.</span></p>`;
+  if (state.rejoin === 'holding') return `<p class="notice warning banner" role="status">${icon('refresh', 18)}<span><strong>Holding session while phone reconnects.</strong> ${isAttached() ? 'Your debugger stays attached while Setu attempts to rejoin this stream.' : 'Setu is trying to restore the ADB stream.'}</span></p>`;
+  if (state.rejoin === 'lost') return `<p class="notice warning banner" role="status">${icon('info', 18)}<span><strong>Phone unreachable.</strong> This stream’s rejoin window ended. Reattach the debugger when the phone is reachable.</span></p>`;
   return '';
 }
 
 function workspacePage() {
   const ready = state.mode === 'solo' || state.sso;
-  const connect = ready && !state.error && !state.session ? button(state.mode === 'solo' ? 'pair' : 'nav', state.mode === 'solo' ? 'Pair a phone' : 'Select device', 'primary', 'plus', 'devices') : '';
+  const connect = ready && !state.error && !state.session && !state.pending ? button(state.mode === 'solo' ? 'pair' : 'nav', state.mode === 'solo' ? 'Pair a phone' : 'Select device', 'primary', 'plus', 'devices') : '';
   const intro = heading('Workspace', `${workspaceName()} / ${state.mode === 'solo' ? 'Solo · Local-first' : 'Corporate policy'}`, connect);
   if (state.error) return intro + corporateIssue();
   if (!ready) return intro + corporateSignIn();
-  return intro + signalStrip() + (state.cap ? `<p class="notice warning banner" role="status">${icon('history', 18)}<span><strong>Corporate time limit in 5 minutes.</strong> Save your work and prepare to reconnect. Deadline announcement integration preview.</span></p>` : '') +
-    rejoinNotice() + (state.stagePreview ? rejoinControls() : '') + `<div class="home-grid relay-grid">${sessionCard()}${detailsPanel()}${devicePanel()}</div>`;
+  return intro + signalStrip() + (state.cap ? `<p class="notice warning banner" role="status">${icon('history', 18)}<span><strong>Corporate time limit within 5 minutes.</strong> Save your work and prepare to reconnect.</span></p>` : '') +
+    (state.pending ? `<div class="notice" role="status">${state.pending.method === 'session.pair_adb' ? 'Pairing the Android debugger.' : 'Connecting to your device.'} ${button('cancel-connect', 'Cancel request', 'secondary')}</div>` : '') + rejoinNotice() + (state.stagePreview ? rejoinControls() : '') + `<div class="home-grid relay-grid">${sessionCard()}${detailsPanel()}${devicePanel()}</div>`;
 }
 
 function sessionCard() {
@@ -202,19 +220,19 @@ function sessionCard() {
   return `<section class="card session-card">
     <div class="section-header"><h2 class="eyebrow">Current session</h2><div class="status-row">
       ${status('Tunnel ready', 'good')}${isAttached() ? status('ADB attached', 'good') : ''}</div></div>
-    <div class="session-title"><div class="device-glyph blue">${icon('phone', 24)}</div><div><h3>${safe(deviceName(device))}</h3><p><code>${safe(device.id)}</code></p></div><span class="session-id">ses_demo_0042</span></div>
+    <div class="session-title"><div class="device-glyph blue">${icon('phone', 24)}</div><div><h3>${safe(deviceName(device))}</h3><p><code>${safe(device.id)}</code></p></div><span class="session-id">${safe(state.session.rpcId)}</span></div>
     <div class="topology${linked ? '' : ' interrupted'}" aria-label="Path from desktop to Android">
       <div class="topology-unit"><div class="topology-node">${icon('monitor', 24)}</div><strong>This desktop</strong><small>Local ADB</small></div>
       <div class="topology-line"><span></span></div>
-      <div class="topology-unit"><div class="topology-node relay-node">${icon(linked && state.session.path === 'lan' ? 'link' : 'lock', 22)}</div><strong>${linked ? (state.session.path === 'lan' ? 'Direct LAN' : 'Relay WSS') : 'Transport'}</strong><small>${linked ? 'Verified stream' : 'Awaiting stream'}</small></div>
+      <div class="topology-unit"><div class="topology-node relay-node">${icon(linked && state.session.path === 'lan' ? 'link' : 'lock', 22)}</div><strong>${linked ? transport() : 'Transport'}</strong><small>${linked ? 'Verified stream' : 'Awaiting stream'}</small></div>
       <div class="topology-line"><span></span></div>
       <div class="topology-unit"><div class="topology-node">${icon('phone', 24)}</div><strong>${safe(deviceName(device))}</strong><small>Android host</small></div>
     </div>
     <p class="session-note">${icon(isAttached() ? 'check' : 'info', 17)}<span>${isAttached() ? '<strong>ADB host reports <code>device</code>.</strong> Your debugger is attached.' : '<strong>Local listener ready.</strong> The SDK negotiates the transport when an ADB stream opens.'}</span></p>
     ${reported === 'unauthorized' ? `<p class="notice warning">${icon('phone', 18)}<span>ADB host reports <code>unauthorized</code>. Unlock the phone and accept Android’s system debugging trust prompt, then reconnect.</span></p>` : ''}
     ${reported === 'offline' ? `<p class="notice warning">${icon('info', 18)}<span>ADB host reports <code>offline</code>. Recheck Android debugging and reconnect the local ADB endpoint.</span></p>` : ''}
-    <div class="command"><span aria-hidden="true">${icon('terminal', 16)}</span><code>${attachCommand()}</code>${button('copy-adb', 'Copy', 'quiet copy-command', 'copy')}</div>
-    <div class="session-actions">${!isAttached() && state.rejoin !== 'lost' ? button('connect-adb', 'Connect ADB', 'primary', 'terminal') : ''}${button('wireless', 'Wireless pairing help', 'quiet', 'help')}${button('background', 'Move to tray', 'quiet', 'tray')}${button('disconnect', 'Disconnect', 'quiet danger', 'unlink')}</div>
+    <div class="command"><span aria-hidden="true">${icon('terminal', 16)}</span><code>${safe(attachCommand())}</code>${button('copy-adb', 'Copy', 'quiet copy-command', 'copy')}</div>
+    <div class="session-actions">${state.mode === 'corporate' ? button('sso', 'Refresh SSO', 'quiet', 'shield') : ''}${!isAttached() ? button('connect-adb', 'Connect ADB', 'primary', 'terminal') : ''}${button('wireless', 'Pair Android debugger', 'quiet', 'help')}${button('background', 'Move to tray', 'quiet', 'tray')}${button('disconnect', 'Disconnect', 'quiet danger', 'unlink')}</div>
   </section>`;
 }
 
@@ -231,9 +249,9 @@ function detailsPanel() {
 
 function deviceRows() {
   const list = pairedDevices();
-  return list.length ? `<ul class="list">${list.map(device => `<li><button type="button" class="list-row" data-action="device" data-value="${device.id}">
-    <span class="row-glyph blue">${icon('phone', 19)}</span><span class="row-copy"><strong>${safe(deviceName(device))}</strong><small><code>${device.id}</code></small></span>
-    ${status(device.kind === 'corporate' ? 'Last seen unknown' : 'Paired')}${icon('chevron', 15)}</button></li>`).join('')}</ul>` : '<p class="muted inset">Paired phones will appear here after connecting.</p>';
+  return list.length ? `<ul class="list">${list.map(device => `<li><button type="button" class="list-row" data-action="device" data-value="${safe(device.id)}">
+    <span class="row-glyph blue">${icon('phone', 19)}</span><span class="row-copy"><strong>${safe(deviceName(device))}</strong><small><code>${safe(device.id)}</code></small></span>
+    ${status(device.kind === 'corporate' ? seen(device.id) : 'Paired')}${icon('chevron', 15)}</button></li>`).join('')}</ul>` : '<p class="muted inset">Paired phones will appear here after connecting.</p>';
 }
 
 function devicePanel() {
@@ -242,14 +260,14 @@ function devicePanel() {
 
 function devicesPage() {
   const corporate = state.mode === 'corporate';
-  const intro = heading('Devices', corporate ? 'Northstar QA · Static policy records' : 'Local paired-device registry',
-    corporate ? '' : button('pair', 'Pair a phone', 'primary', 'plus'));
+  const intro = heading('Devices', corporate ? 'Northstar QA · Granted devices' : 'Local paired-device registry',
+    corporate ? (state.sso ? button('refresh-presence', 'Refresh presence', 'secondary', 'refresh') : '') : button('pair', 'Pair a phone', 'primary', 'plus'));
   if (state.error) return intro + corporateIssue();
   if (corporate && !state.sso) return intro + corporateSignIn();
   return intro + `<div class="page-grid"><section class="card device-card"><div class="section-header"><h2>${corporate ? 'Policy devices' : 'Paired devices'}</h2></div>${deviceRows()}</section>
     <section class="card standard-card"><div class="feature-icon">${icon(corporate ? 'shield' : 'link', 24)}</div>
     <h2>${corporate ? 'Device access' : 'Pairing and trust'}</h2>
-    <p class="muted">${corporate ? 'Each record comes from the static policy fixture. Device presence is unknown. Nicknames are local to this preview.' : 'A successful code exchange pins the desktop key on the phone and saves the peer on this computer. Forget removes this computer’s paired record.'}</p></section></div>`;
+    <p class="muted">${corporate ? 'Current presence is shown for granted devices when the snapshot is less than 60 seconds old. Nicknames are local.' : 'A successful code exchange pins the desktop key on the phone and saves the peer on this computer. Forget removes this computer’s paired record.'}</p></section></div>`;
 }
 
 const auditEvents = [
@@ -308,6 +326,7 @@ function settingsPage() {
   return heading('Settings', 'Local daemon startup configuration') +
     `<div class="page-grid"><section class="card standard-card"><div class="section-header"><h2>Relay and proxy</h2>${icon('settings', 20)}</div>
     <form data-form="settings" novalidate>
+      <label for="setting-label">Computer name</label><input id="setting-label" name="label" type="text" value="${safe(state.settings.label)}" maxlength="64" autocomplete="off" aria-describedby="label-hint"><p id="label-hint" class="hint">Sent as --label at startup. The phone shows it as an unverified computer name.</p>
       <label for="setting-relay">Custom relay URL</label><input id="setting-relay" name="relay" type="text" value="${safe(state.settings.relay)}" placeholder="wss://relay.example.test" autocomplete="off" aria-describedby="relay-hint setting-error">
       <p id="relay-hint" class="hint">Use the administrator’s WSS/WS URL or a TCP host:port.</p>
       <label for="setting-pin">Relay certificate pin</label><input id="setting-pin" name="pin" type="text" value="${safe(state.settings.pin)}" autocomplete="off" spellcheck="false" aria-describedby="pin-hint setting-error">
@@ -318,16 +337,16 @@ function settingsPage() {
       <div class="button-row"><button class="button primary" type="submit">Save preview settings</button>${button('nav', 'Open diagnostics', 'quiet', 'terminal', 'doctor')}</div>
     </form></section>
     <section class="card standard-card"><div class="feature-icon">${icon('shield', 24)}</div><h2>Apply configuration</h2>
-    <p class="muted">The production app supplies these values through <code>--relay</code>, <code>--relay-pin</code> and <code>--proxy</code> when starting the daemon. This preview stores values only while the page is open.</p></section></div>`;
+    <p class="muted">The production app supplies these values through <code>--label</code>, <code>--relay</code>, <code>--relay-pin</code> and <code>--proxy</code> when starting the daemon. This preview stores values only while the page is open.</p></section></div>`;
 }
 
 function rejoinControls() {
-  return `<div class="rejoin-controls"><label for="rejoin-stage">Rejoin stage · Integration preview</label><select id="rejoin-stage" data-action="rejoin-stage">
+  return `<div class="rejoin-controls"><label for="rejoin-stage">Rejoin stage · SDK event fixture</label><select id="rejoin-stage" data-action="rejoin-stage">
     <option value="silent"${state.rejoin === 'silent' ? ' selected' : ''}>First 10 seconds · Silent</option>
     <option value="holding"${state.rejoin === 'holding' ? ' selected' : ''}>10–90 seconds · Holding</option>
     <option value="lost"${state.rejoin === 'lost' ? ' selected' : ''}>After 90 seconds · Stream lost</option>
     <option value="restored"${state.rejoin === 'restored' ? ' selected' : ''}>New stream · Reattach ADB</option>
-    </select><p class="hint">The engine’s rejoin window starts after an underlying stream break is detected. These stages need a desktop adapter and are shown without a live timer.</p></div>`;
+    </select><p class="hint">These fixtures replay path_down, path_up and path_lost. The SDK’s rejoin window starts when it detects the broken stream.</p></div>`;
 }
 
 function openDialog(title, content, wide = false) {
@@ -360,8 +379,8 @@ function deviceDialog(id) {
   const device = pairedDevices().find(item => item.id === id);
   if (!device) return;
   openDialog(deviceName(device), `<div class="device-summary"><span class="device-glyph blue">${icon('phone', 24)}</span>
-    <div><strong><code>${device.id}</code></strong><p class="muted">${device.kind === 'solo' ? 'Locally paired' : 'Static corporate policy record · Last seen unknown'}</p></div></div>
-    <form data-form="nickname" data-device="${device.id}"><label for="nickname">Local nickname</label>
+    <div><strong><code>${safe(device.id)}</code></strong><p class="muted">${device.kind === 'solo' ? 'Locally paired' : seen(device.id)}</p></div></div>
+    <form data-form="nickname" data-device="${safe(device.id)}"><label for="nickname">Local nickname</label>
       <input id="nickname" name="nickname" value="${safe(deviceName(device))}" maxlength="56" required>
       <div class="button-row nickname-actions"><button type="submit" class="button secondary">Save nickname</button></div></form>
     <div class="button-row dialog-actions">
@@ -370,20 +389,27 @@ function deviceDialog(id) {
 }
 
 function wirelessDialog() {
-  openDialog('Wireless Debugging pairing', `<p>On Android 11 or later while connected to Wi-Fi, open <strong>Wireless debugging → Pair device with pairing code</strong>. Keep the Android dialog open.</p>
-    <p class="notice warning">${icon('info', 18)}<span>Integration preview. A separate encrypted listener must first target Android’s temporary pairing port. SDK v1.0.1 has no dedicated pairing RPC. A normal debugging listener is for <code>adb connect</code>, after pairing.</span></p>
+  if (!state.session || state.pending) return;
+  openDialog('Pair the Android debugger', `<p>On Android, keep <strong>Wireless debugging → Pair device with pairing code</strong> open. Enter its six-digit system code for this device.</p>
     <form data-form="wireless" novalidate><label for="system-code">Android system pairing code</label>
-    <input id="system-code" name="code" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="000000">
-    <label for="system-port">Android system pairing port</label>
-    <input id="system-port" name="port" inputmode="numeric" autocomplete="off" maxlength="5" placeholder="37145">
-    <p class="hint">Use the port in the Android pairing dialog, which is different from the Wireless Debugging connection port. The preview discards the example system code after submission.</p>
+    <input id="system-code" name="code" inputmode="numeric" autocomplete="off" maxlength="6" required placeholder="000000">
+    <label for="system-port">Android system pairing port (optional)</label>
+    <input id="system-port" name="port" inputmode="numeric" autocomplete="off" maxlength="5" aria-describedby="port-hint">
+    <p id="port-hint" class="hint">Leave empty to let the phone find it</p>
     <p id="wireless-error" class="error-message" role="alert" hidden></p>
-    <div class="button-row dialog-actions"><button type="submit" class="button secondary">Show pairing command ${icon('terminal', 17)}</button></div></form>`);
+    <div class="button-row dialog-actions"><button type="submit" class="button primary">Pair Android debugger</button></div></form>`);
 }
 
 function ssoDialog() {
-  openDialog('Continue in your browser', `<p>The application would open your organization’s OIDC sign-in. Its key-bound token issuer would use the file-backed Ed25519 public key returned by <code>identity.public_key</code>.</p>
-    <p class="muted">The daemon consumes an identity token file. The issuer, token lifecycle, and any live refresh behavior are integration work. This preview uses a policy fixture.</p>
+  if (hasDesktopRpc && typeof window.setuDesktopRequestToken === 'function') {
+    void refreshToken();
+    return;
+  }
+  if (hasDesktopRpc) {
+    openDialog('Corporate sign-in', '<p>Use your desktop app’s organization sign-in to send an updated identity token to the daemon.</p>');
+    return;
+  }
+  openDialog('Continue in your browser', `<p>Organization SSO uses <code>identity.public_key</code>. A returned Setu JWT is applied live through <code>auth.set_token</code>.</p>
     <div class="button-row dialog-actions">${button('close', 'Cancel', 'secondary')}${button('sso-return', 'Simulate browser SSO return', 'primary', 'arrow')}</div>`);
 }
 
@@ -418,51 +444,264 @@ function go(view) {
     return;
   }
   render(true);
+  if ((view === 'devices' && (hasDesktopRpc || !state.presence)) || (hasDesktopRpc && view === 'workspace' && state.mode === 'solo')) void refreshDirectory();
 }
 
-function openSession(id, adb = 'none', path = null, wire = null) {
-  state.session = { id, adb, path, wire };
+const outages = new Map();
+let serial = 0, presenceSequence = 0, presenceTimer, deadlineTimer;
+
+function clearPath() {
+  for (const item of outages.values()) clearTimeout(item.timer);
+  outages.clear();
+  clearTimeout(deadlineTimer);
+  state.rejoin = '';
+  state.cap = false;
+}
+
+function openSession(id, adb = 'none', path = null, wire = null, result = {}) {
+  clearPath();
+  state.session = { id, adb, path, wire, addr: result.adb_addr || endpoint, rpcId: result.session_id || 'ses_demo_0042' };
   state.error = null;
   go('workspace');
 }
 
+function fixturePresence() {
+  return [{device_id:'qa-pixel8a-07',online:true,sessions:1},{device_id:'qa-xcover6-12',online:false,sessions:0}];
+}
+
+async function refreshDirectory() {
+  const mode = state.mode;
+  if (mode === 'corporate' && !state.sso) return;
+  if (mode === 'solo' && !hasDesktopRpc) return;
+  const sequence = ++presenceSequence;
+  try {
+    const result = await requestSdk(mode === 'corporate' ? 'devices.presence' : 'devices.list');
+    if (!Array.isArray(result?.devices)) throw Error('Unavailable');
+    if (sequence !== presenceSequence || state.mode !== mode) return;
+    if (mode === 'solo') state.soloRows = result.devices.filter(x => x?.paired && typeof x.id === 'string');
+    else {
+      state.presence = { rows: result.devices.filter(x => typeof x?.device_id === 'string' && x.device_id), at: performance.now() };
+      clearTimeout(presenceTimer);
+      presenceTimer = setTimeout(() => { if (['devices','workspace'].includes(state.view) && !state.inTray) render(); }, 60010);
+    }
+  } catch {
+    if (sequence !== presenceSequence) return;
+    if (mode === 'corporate' && state.presence) state.presence.at = -Infinity;
+    announce('Could not refresh device availability.');
+  }
+  if (['devices','workspace'].includes(state.view) && !state.inTray) render();
+}
+
+async function setIdentityToken(token) {
+  await requestSdk('auth.set_token', { token });
+  state.sso = true;
+  if ([-32015,-32016].includes(state.error)) state.error = null;
+  go(state.session || state.error ? 'workspace' : 'devices');
+  announce('Corporate credential updated. Existing sessions stay running.');
+}
+
+async function refreshToken() {
+  try {
+    const identity = await requestSdk('identity.public_key');
+    const token = await window.setuDesktopRequestToken(identity);
+    if (token) await setIdentityToken(token);
+  } catch {
+    announce('Corporate sign-in could not complete. Try signing in again.');
+  }
+}
+
+async function pendingRequest(method, params) {
+  if (state.pending) return;
+  const request = { method, id: 'setu-ui-' + (++serial) };
+  state.pending = request;
+  if (method === 'session.connect') go('workspace');
+  else {
+    openDialog('Pairing Android debugger', `<p>Setu is pairing over the tunnel.</p>${button('cancel-connect', 'Cancel pairing', 'secondary')}`);
+    render();
+  }
+  try {
+    const result = await requestSdk(method, params, request.id);
+    if (state.pending === request) return result;
+  } finally {
+    if (state.pending === request) {
+      state.pending = null;
+      render();
+    }
+  }
+}
+
+async function cancelPending() {
+  const request = state.pending;
+  if (!request || request.cancelling) return;
+  request.cancelling = true;
+  try {
+    const result = await requestSdk('session.cancel', { request_id: request.id });
+    if (!result?.cancelled) announce('The request may already have completed.');
+  } catch {
+    announce('Could not cancel the pending request.');
+  } finally {
+    request.cancelling = false;
+  }
+}
+
+async function connectDevice(params) {
+  const returnView = state.view;
+  try {
+    const result = await pendingRequest('session.connect', params);
+    if (!result) return;
+    if (typeof result.device_id !== 'string' || !result.device_id || !result.session_id ||
+        !/^127[.]0[.]0[.]1:[1-9][0-9]{0,4}$/.test(result.adb_addr)) throw Error('Invalid session result');
+    if (params.pairing_code) {
+      state.paired.add(result.device_id);
+      state.pairUsed = true;
+    }
+    openSession(result.device_id, 'none', null, null, result);
+    if (params.pairing_code) announce('Pairing succeeded. The device is saved locally.');
+  } catch (error) {
+    if (error?.code === -32022) { go(returnView); return announce('Connection cancelled.'); }
+    if (corporateFailures[error?.code]) {
+      state.error = error.code;
+      state.recoverDevice = params.device_id;
+      go('workspace');
+    } else if (params.pairing_code) {
+      pairDialog();
+      const input = dialog.querySelector('#pair-code');
+      if (input) showError('pair-error', error?.code === -32013 ? 'Pairing code rejected (−32013). Check the current code shown on Android.' : 'Could not connect. Check hosting and try again.', input);
+    } else announce('Could not connect. Check device availability and try again.');
+  }
+}
+
+function updatePathView(force = true) {
+  const wasVisible = ['lost','holding'].includes(state.rejoin);
+  const stages = Array.from(outages.values(), item => item.stage);
+  state.rejoin = ['lost','holding','silent'].find(key => stages.includes(key)) || '';
+  if ((force || wasVisible !== ['lost','holding'].includes(state.rejoin)) && state.view === 'workspace' && !state.inTray) render();
+}
+
+async function resync() {
+  const current = state.session;
+  for (const item of outages.values()) clearTimeout(item.timer);
+  outages.clear();
+  updatePathView();
+  void refreshDirectory();
+  if (!hasDesktopRpc || !current) return;
+  try {
+    const result = await requestSdk('session.list');
+    if (state.session === current && Array.isArray(result?.sessions) && !result.sessions.some(item => item.session_id === current.rpcId)) {
+      state.session = null;
+      clearPath();
+      render();
+    }
+  } catch { announce('Could not refresh the session list.'); }
+}
+
+function receiveEvent(input) {
+  if (input?.method === 'events.dropped') return void resync();
+  const event = input?.method === 'event' ? input.params : input;
+  const session = state.session;
+  if (!session || event?.session !== session.rpcId) return;
+  const {type, fields = {}} = event;
+  if (['session_expired','peer_closed','session_down'].includes(type)) {
+    state.recoverDevice = session.id;
+    state.session = null;
+    clearPath();
+    if (type !== 'session_down') {
+      state.error = type === 'session_expired' ? -32025 : -32026;
+      state.view = 'workspace';
+    }
+    render();
+    return;
+  }
+  if (!['path_down','path_up','path_lost'].includes(type) || !fields.session_id) return;
+  const id = fields.session_id;
+  const old = outages.get(id);
+  if (type === 'path_down') {
+    if (old) return;
+    const item = {stage:'silent'};
+    outages.set(id,item);
+    item.timer = setTimeout(() => {
+      if (outages.get(id) !== item || state.session !== session) return;
+      item.stage = 'holding';
+      updatePathView();
+    },10000);
+  } else {
+    clearTimeout(old?.timer);
+    outages.delete(id);
+    if (type === 'path_lost') outages.set(id, {stage:'lost'});
+  }
+  const oldPath = session.path;
+  if (['lan','relay-tcp','relay-ws','relay-wss'].includes(fields.transport) && type !== 'path_lost') session.path = fields.transport;
+  updatePathView(type !== 'path_down' || session.path !== oldPath);
+}
+
+function setSessionDeadline({session_id,expires_at} = {}) {
+  if (session_id !== state.session?.rpcId || !state.session || state.mode !== 'corporate') return;
+  clearTimeout(deadlineTimer);
+  const deadline = Date.parse(expires_at);
+  const refresh = () => {
+    const remaining = deadline - Date.now();
+    state.cap = remaining > 0 && remaining <= 300000;
+    if (state.view === 'workspace') render();
+    if (remaining > 0) deadlineTimer = setTimeout(refresh, Math.min(2147483647, state.cap ? remaining : remaining-300000));
+  };
+  refresh();
+}
+
 function chooseMode(mode) {
+  if (state.pending) return announce('Cancel the pending request before switching workspaces.');
   if (mode !== state.mode) {
+    clearPath();
+    presenceSequence++;
+    state.presence = null;
     state.session = null;
     state.error = null;
-    state.rejoin = '';
-    state.cap = false;
     state.stagePreview = false;
     state.mode = mode;
+    state.sso = false;
   }
   go('workspace');
 }
 
 function runScenario(key) {
   if (!scenarios.some(([name]) => name === key)) return;
-  Object.assign(state, { mode: 'solo', sso: false, session: null, error: null, rejoin: '', cap: false, stagePreview: false, inTray: false, pairUsed: false, audit: 'verified', diagnostic: 'healthy' });
-  const code = { 'no-grant': -32017, blocked: -32018, revoked: -32014, 'token-invalid': -32015, 'token-expired': -32016 }[key];
-  if (code || key === 'corporate' || key === 'session-cap') {
+  if (state.pending) return announce('Cancel the pending request before changing scenarios.');
+  clearPath();
+  presenceSequence++;
+  Object.assign(state,{scenario:key, mode:'solo',sso:false,session:null,error:null,stagePreview:false,inTray:false,pairUsed:false,audit:'verified',diagnostic:'healthy',presence:null});
+  const error = ({'no-grant':-32017,blocked:-32018,revoked:-32014,'token-invalid':-32015,'token-expired':-32016,'session-expired':-32025,'peer-closed':-32026})[key];
+  if (error || ['corporate','presence','presence-stale','session-cap','token-refresh'].includes(key)) {
     state.mode = 'corporate';
-    state.sso = key !== 'corporate' && key !== 'token-invalid' && key !== 'token-expired';
-    state.error = code || null;
+    state.sso = !['corporate','token-invalid','token-expired'].includes(key);
+    state.error = error || null;
+    state.recoverDevice = 'qa-pixel8a-07';
   }
-  if (key === 'session-cap') {
-    state.cap = true;
-    return openSession('qa-pixel8a-07', 'device', 'relay-wss', 'tls');
+  if (key === 'presence' || key === 'presence-stale') {
+    state.presence = {rows:fixturePresence(),at:performance.now()-(key === 'presence-stale' ? 60000 : 0)};
+    return go('devices');
+  }
+  if (key === 'session-cap' || key === 'token-refresh') {
+    openSession('qa-pixel8a-07','device','relay-wss','tls');
+    if (key === 'session-cap') setSessionDeadline({session_id:state.session.rpcId,expires_at:new Date(Date.now()+240000).toISOString()});
+    return;
   }
   if (key === 'audit' || key === 'doctor') {
     if (key === 'doctor') state.diagnostic = 'failure';
     return go(key);
   }
-  if (key === 'rejoin') {
-    state.rejoin = 'silent';
-    state.stagePreview = true;
+  if (key === 'rejoin') state.stagePreview = true;
+  if (['live','direct','rejoin'].includes(key)) {
+    openSession('pixel-8-personal','device',key==='direct'?'lan':'relay-wss',key==='direct'?'tcpip':'tls');
+    if (key==='rejoin') setRejoinStage('silent');
+    return;
   }
-  if (['live', 'direct', 'rejoin'].includes(key)) return openSession('pixel-8-personal', 'device', key === 'direct' ? 'lan' : 'relay-wss', key === 'direct' ? 'tcpip' : 'tls');
-  if (key === 'unauthorized' || key === 'adb-offline') return openSession('pixel-8-personal', key === 'unauthorized' ? 'unauthorized' : 'offline', 'relay-wss', 'tls');
+  if (key==='unauthorized'||key==='adb-offline') return openSession('pixel-8-personal',key==='unauthorized'?'unauthorized':'offline','relay-wss','tls');
+  if (key.startsWith('wireless')) {
+    openSession('pixel-8a-casey');
+    return wirelessDialog();
+  }
   go('workspace');
   if (key === 'pair') pairDialog();
+  if (key === 'cancel') void connectDevice({device_id:'pixel-8-personal'});
 }
 
 function formatPairing(value) {
@@ -524,8 +763,28 @@ function doctorFixture() {
   });
 }
 
-async function requestSdk(method, params = {}) {
-  if (hasDesktopRpc) return window.setuDesktopRpc(method, params);
+async function requestSdk(method, params = {}, requestId) {
+  if (hasDesktopRpc) return window.setuDesktopRpc(method, params, requestId);
+  if (method === 'devices.presence') return {devices:fixturePresence()};
+  if (method === 'auth.set_token') return {subject:'fixture'};
+  if (method === 'session.pair_adb') {
+    const code = state.scenario==='wireless-unsupported' ? -32024 : state.scenario==='wireless-failed' ? -32023 : null;
+    if (code) throw Object.assign(Error('Pairing fixture error'),{code});
+    return {device_id:params.device_id,paired:true,transport:'relay-wss'};
+  }
+  if (method === 'session.connect') {
+    if (state.scenario === 'cancel') return new Promise((_,reject) => { state.pending.abort = () => reject(Object.assign(Error('Cancelled'),{code:-32022})); });
+    if (params.pairing_code && (params.pairing_code!==pairExample||state.pairUsed)) throw Object.assign(Error('Pairing rejected'),{code:-32013});
+    const failure = devices.find(item=>item.id===params.device_id)?.failure;
+    if (failure) throw Object.assign(Error('Access denied'),{code:failure});
+    return {session_id:'ses_demo_0042',adb_addr:endpoint,device_id:params.device_id||'pixel-8a-casey'};
+  }
+  if (method === 'session.cancel') {
+    const cancelled = Number(state.pending?.id===params.request_id && Boolean(state.pending?.abort));
+    if (cancelled) state.pending.abort();
+    return {cancelled};
+  }
+  if (method === 'session.stop' || method === 'devices.forget') return {};
   if (method === 'audit.verify') return fixtureChain();
   if (method === 'doctor') return { checks: doctorFixture() };
   const report = {
@@ -586,21 +845,42 @@ function auditIntegrity() {
 }
 
 function setRejoinStage(stage) {
-  state.rejoin = stage;
-  if (stage === 'lost' || stage === 'restored') {
-    state.session.adb = 'none';
-    state.session.path = null;
-    state.session.wire = null;
+  clearPath();
+  const event = {session:state.session.rpcId,fields:{session_id:'fixture-stream',transport:'relay-wss'}};
+  if (stage==='silent'||stage==='holding') {
+    state.session.adb='device';
+    receiveEvent({...event,type:'path_down'});
+    if (stage==='holding') {
+      const item=outages.get('fixture-stream');
+      clearTimeout(item.timer);
+      item.stage='holding';
+    }
+  } else if (stage==='lost') {
+    state.session.adb='offline';
+    receiveEvent({...event,type:'path_lost'});
   } else {
-    state.session.adb = 'device';
-    state.session.path = 'relay-wss';
-    state.session.wire = 'tls';
+    state.session.adb='none';
+    receiveEvent({...event,type:'path_up'});
+    state.rejoin='restored';
   }
+  if (stage !== 'restored') updatePathView();
   render();
-  shell.querySelector('#rejoin-stage').focus();
+  shell.querySelector('#rejoin-stage')?.focus();
 }
 
-document.addEventListener('click', event => {
+window.setuDesktopEvent=receiveEvent;
+window.setuDesktopSetToken=setIdentityToken;
+window.setuDesktopSessionDeadline=setSessionDeadline;
+window.setuDesktopStartupArguments=()=>state.settings.label?['--label',state.settings.label]:[];
+try { state.settings.label=(localStorage.getItem('setu.computer-name')||'').slice(0,64); } catch { /* File preview storage can be disabled. */ }
+window.setuDesktopAdbStatus=({adb_addr,status})=>{
+  if (state.session?.addr!==adb_addr||!Object.hasOwn(labels,status)) return;
+  state.session.adb=status;
+  if (status==='device') for (const [id,item] of outages) if (item.stage==='lost') outages.delete(id);
+  updatePathView();
+};
+
+document.addEventListener('click', async event => {
   const control = event.target.closest('button[data-action], a[data-action]');
   if (!control) return;
   event.preventDefault();
@@ -622,14 +902,23 @@ document.addEventListener('click', event => {
         openDialog('Switch workspace?', `<p>Disconnect the current session before changing the daemon’s workspace mode.</p><div class="button-row dialog-actions">${button('close', 'Keep session', 'secondary')}${button('confirm-mode', 'Disconnect and switch', 'primary', 'arrow', value)}</div>`);
       } else chooseMode(value);
       break;
-    case 'confirm-mode': chooseMode(value); break;
+    case 'confirm-mode':
+      if (state.session) { try { await requestSdk('session.stop',{session_id:state.session.rpcId}); } catch { announce('Could not disconnect before switching.'); break; } }
+      chooseMode(value); break;
     case 'sso': ssoDialog(); break;
     case 'sso-return':
-      state.sso = true;
-      state.error = null;
-      go('devices');
-      announce('SSO fixture returned.');
+      try { await setIdentityToken('fixture-token'); } catch { announce('The daemon rejected the credential.'); }
       break;
+    case 'refresh-presence': void refreshDirectory(); break;
+    case 'cancel-connect': void cancelPending(); break;
+    case 'recover-session': {
+      const device_id = [-32025,-32026].includes(state.error) && state.recoverDevice;
+      state.error = null;
+      if (device_id && state.sso) void connectDevice({device_id});
+      else go('devices');
+      break;
+    }
+
     case 'admin':
       openDialog('Contact your IT administrator', `<p>Share the error code and device ID with your IT help desk. Ask them to review your grant, corporate identity, or Android device policy.</p>`);
       break;
@@ -640,10 +929,7 @@ document.addEventListener('click', event => {
       if (!device || state.error || (state.mode === 'corporate' && !state.sso)) break;
       if (state.session) {
         openDialog('A local listener is running', `<p>Disconnect the current session before creating a new one.</p>${button('nav', 'View current session', 'secondary', 'arrow', 'workspace')}`);
-      } else if (device.failure) {
-        state.error = device.failure;
-        go('workspace');
-      } else openSession(device.id);
+      } else void connectDevice({device_id:device.id});
       break;
     }
     case 'forget':
@@ -651,6 +937,7 @@ document.addEventListener('click', event => {
         <div class="button-row dialog-actions">${button('close', 'Cancel', 'secondary')}${button('forget-confirm', 'Forget paired device', 'primary danger-fill', '', value)}</div>`);
       break;
     case 'forget-confirm':
+      try { await requestSdk('devices.forget',{device_id:value}); } catch { announce('Could not forget the device.'); break; }
       state.paired.delete(value);
       go('devices');
       announce('Local paired record removed.');
@@ -659,7 +946,10 @@ document.addEventListener('click', event => {
       openDialog('Disconnect this session?', `<p>Stop this computer’s local listener and the ADB streams using it.</p><div class="button-row dialog-actions">${button('close', 'Keep session', 'secondary')}${button('end-session', 'Disconnect', 'primary danger-fill', 'unlink')}</div>`);
       break;
     case 'end-session':
+      if (!state.session) break;
+      try { await requestSdk('session.stop',{session_id:state.session.rpcId}); } catch { announce('Could not stop the session.'); break; }
       state.session = null;
+      clearPath();
       state.rejoin = '';
       state.cap = false;
       state.stagePreview = false;
@@ -670,16 +960,20 @@ document.addEventListener('click', event => {
     case 'restore': go('workspace'); break;
     case 'clear-error': state.error = null; go('devices'); break;
     case 'connect-adb':
-      if (state.session && state.rejoin !== 'lost') {
-        state.session.adb = 'device';
+      if (state.session && hasDesktopRpc) {
+        if (typeof window.setuDesktopConnectAdb==='function') {
+          try { await window.setuDesktopConnectAdb(state.session.addr); } catch { announce('Could not run local ADB.'); }
+        } else void copyText(attachCommand());
+      } else if (state.session) {
+        state.session.adb='device';
         state.session.path ||= 'relay-wss';
         state.session.wire ||= 'tls';
-        render(true);
+        for (const [id,item] of outages) if (item.stage==='lost') outages.delete(id);
+        updatePathView();
         announce('Fixture ADB host reports device.');
-      } else {
-        announce('Wait for a new stream before reconnecting ADB.');
       }
       break;
+
     case 'copy-adb': copyText(attachCommand()); break;
     case 'wireless': wirelessDialog(); break;
     case 'report': reportDialog(); break;
@@ -696,21 +990,34 @@ document.addEventListener('submit', async event => {
     case 'pair': {
       const code = formatPairing(field('code'));
       if (!/^\d{4}-\d{6}$/.test(code)) return showError('pair-error', 'Enter all ten digits from the Android phone.', form.elements.code);
-      if (code !== pairExample || state.pairUsed) return showError('pair-error', 'Pairing code rejected (−32013). Check the current code shown on Android and retry.', form.elements.code);
-      state.paired.add('pixel-8a-casey');
-      state.pairUsed = true;
-      openSession('pixel-8a-casey');
-      announce('Pairing succeeded. The device is saved locally.');
+      form.elements.code.value='';
+      void connectDevice({pairing_code:code});
       break;
     }
     case 'wireless': {
-      if (!/^\d{6}$/.test(field('code'))) return showError('wireless-error', 'Enter the six-digit system code shown by Android.', form.elements.code);
-      if (!/^\d{1,5}$/.test(field('port')) || Number(field('port')) < 1 || Number(field('port')) > 65535) return showError('wireless-error', 'Enter a pairing port from 1 to 65535.', form.elements.port);
-      openDialog('Pairing command preview', `<p>First point an encrypted pairing listener at Android’s pairing port <strong>${Number(field('port'))}</strong>. The local port in this example is allocated separately by the adapter.</p>
-        <p class="notice">${icon('terminal', 18)}<code>adb pair 127.0.0.1:37146</code></p>
-        <p>Enter the system code in your terminal when ADB asks. After pairing, open the normal debugging listener and use its <code>adb connect</code> command.</p>`);
+      if (state.pending||!state.session) break;
+      const code=field('code'), port=field('port');
+      if (!/^[0-9]{6}$/.test(code)) return showError('wireless-error','Enter the six-digit code shown by Android.',form.elements.code);
+      if (port&&(!/^[0-9]{1,5}$/.test(port)||Number(port)<1||Number(port)>65535)) return showError('wireless-error','Enter a port from 1 to 65535, or leave it empty.',form.elements.port);
+      const params={device_id:state.session.id,pairing_code:code};
+      if (port) params.pairing_port=Number(port);
+      form.elements.code.value='';
+      try {
+        const result=await pendingRequest('session.pair_adb',params);
+        if (!result?.paired) throw Error('Pair failed');
+        closeDialog();
+        announce('Android debugger paired. Use Connect ADB to attach.');
+      } catch (error) {
+        if (error?.code===-32022) { closeDialog(); announce('Android pairing cancelled.'); break; }
+        wirelessDialog();
+        const message=error?.code===-32024?'Update Setu on the phone to use this':'Android pairing failed. Reopen the Android pairing screen and check the current code and optional port.';
+        const input=dialog.querySelector('#system-code');
+        if (input) showError('wireless-error',message,input);
+        else announce(message);
+      }
       break;
     }
+
     case 'nickname':
       if (!field('nickname')) {
         form.elements.nickname.value = '';
@@ -725,7 +1032,8 @@ document.addEventListener('submit', async event => {
       if (!validRelay(field('relay'))) return showError('setting-error', 'Enter a valid wss:// or ws:// relay URL, or a TCP host:port.', form.elements.relay);
       if (field('pin') && !/^(?:[a-f\d]{64}|(?:[a-f\d]{2}:){31}[a-f\d]{2})$/i.test(field('pin'))) return showError('setting-error', 'Enter a 64-digit hexadecimal SHA-256 pin with optional colon separators.', form.elements.pin);
       if (!parseUrl(field('proxy'), ['http:'])) return showError('setting-error', 'Enter an HTTP CONNECT proxy URL without credentials.', form.elements.proxy);
-      state.settings = { relay: field('relay'), pin: field('pin'), proxy: field('proxy') };
+      state.settings = { relay: field('relay'), pin: field('pin'), proxy: field('proxy'), label: field('label') };
+      try { localStorage.setItem('setu.computer-name',state.settings.label); } catch { /* File preview storage can be disabled. */ }
       announce('Preview settings saved.');
       break;
     }
@@ -780,4 +1088,13 @@ document.addEventListener('change', event => {
 });
 
 const initialScenario = new URLSearchParams(location.search).get('scenario');
-runScenario(scenarios.some(([name]) => name === initialScenario) ? initialScenario : 'live');
+if (hasDesktopRpc) {
+  document.querySelector('[data-action="scenarios"]').hidden=true;
+  if (initialScenario==='corporate') state.mode='corporate';
+  go(['audit','doctor'].includes(initialScenario)?initialScenario:'workspace');
+  window.addEventListener('focus', () => { if (state.mode === 'corporate' && state.sso) void refreshDirectory(); });
+  setInterval(() => { if (state.mode === 'corporate' && state.sso) void refreshDirectory(); }, 30000);
+  void requestSdk('events.subscribe').catch(()=>announce('Could not subscribe to session updates.'));
+} else {
+  runScenario(scenarios.some(([name])=>name===initialScenario)?initialScenario:'live');
+}

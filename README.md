@@ -6,9 +6,9 @@ Browser wireframes for the Setu desktop companion on Windows, macOS, and Linux. 
 
 ## Open the current prototype
 
-Open `index.html` in a browser and use the scenario menu to review different SDK responses. Solo starts locally. Pair using the sample code shown in the pairing screen, or choose a saved device. In Corporate, use the device ID and inspect grant, revocation, credential, and device-policy examples. Review **This Computer's Audit Log** and **Diagnostics** separately from the session workspace.
+Open `index.html` in a browser and use the scenario menu to review different SDK responses. Solo starts locally. Pair using the sample code shown in the pairing screen, or choose a saved device. Review **Android system pairing**, **Cancel a pending connection**, **Corporate presence**, and **Interrupted network path** in the scenario menu. Review **This Computer's Audit Log** and **Diagnostics** separately from the session workspace.
 
-The wireframe uses fixtures. The canonical journeys specify which actions map directly to Setu SDK v1.0.1, which require native application work, and which depend on new SDK or organization services.
+The wireframe uses fixtures. The canonical journeys specify which actions map directly to Setu-SDK v1.1.0 ([921aded](https://github.com/SumukhaK/Setu/commit/921aded)), which require native application work, and which depend on new SDK or organization services.
 
 ## Build the native core
 
