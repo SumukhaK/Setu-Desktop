@@ -1,6 +1,6 @@
 # Desktop screen inventory
 
-**Selected layout** · Relay sidebar and workspace cards with the Signal status strip. The strip presents listener, local ADB, and transport as independent facts. [Canonical journeys and acceptance tests](JOURNEYS.md)
+**Selected layout** · Relay sidebar and workspace cards with the Signal status strip. The strip presents listener, local ADB, and transport as independent facts. [Canonical journeys and acceptance tests](JOURNEYS.md) · [TDD tickets](TDD_TICKETS.md) · Baseline: Setu SDK v1.1.0
 
 ```text
 Setu                          Prototype scenarios
@@ -19,20 +19,20 @@ Setu                          Prototype scenarios
 
 | ID | Screen or state | Data and primary action | Acceptance |
 | --- | --- | --- | --- |
-| D01 | Workspace selector | Solo opens local state immediately. Corporate opens configuration status and the app-level SSO entry. Managed guidance explains that the host and relay enforce policy. | P01, P07, P12 |
-| D02 | Pair new device sheet | Numeric 4+6 code, formatted as typed or pasted. Submit to `session.connect`, with inline malformed, rejected and unavailable outcomes. | P02, P03 |
-| D03 | Device list and device detail | Use `devices.list` for local pins and an authorized provider for Corporate. Show exact ID, editable local nickname, and unknown presence for static entries. Connect or forget locally. | P08, P11, P17 |
-| D04 | Current session and status strip | Separate authenticating, tunnel/listener ready and ADB attachment. Copy the loopback address or connect local ADB. Show unauthorized/offline recovery. Determine path from observed telemetry, else show unknown. | P09 |
-| D05 | Android system pairing handoff | Temporary system code and temporary Android pairing port. Explain separate Setu and Android trust steps. The automated forward and local pairing require an adapter and hardware validation. | P05 |
-| D06 | Corporate recovery panel | Map only typed denial codes to the corresponding help. Device policy and grant failures point to the administrator. Invalid and expired credentials point to SSO. | P11, P12 |
-| D07 | Background and recovery | A tray restore preserves the session. Provide retry and reattach when appropriate. Instrumented holding and deadline warnings are separate capability previews. | P13, P14, P17 |
+| D01 | Workspace selector | Solo opens local state immediately. Corporate opens configuration status and the app-level SSO entry. Each workspace has its own daemon and state directory (`daemon_ready` on start). Managed guidance explains that the host and relay enforce policy. | P01, P07, P12, P18 |
+| D02 | Pair new device sheet | Numeric 4+6 code, formatted as typed or pasted. Submit to `session.connect`, with inline malformed, rejected (`-32013`) and unavailable (`-32011`) outcomes. **Cancel** calls `session.cancel {request_id}`. | P02, P03, P19 |
+| D03 | Device list and device detail | Solo: `devices.list` for local pins, presence unknown. Corporate: `devices.presence` for granted devices with fresh or **Last seen unknown** presence. Show exact ID and editable local nickname. Connect or forget locally. | P08, P11, P17, P21 |
+| D04 | Current session and status strip | Separate authenticating, tunnel/listener ready and ADB attachment. Copy the loopback address or connect local ADB. Show unauthorized/offline recovery. Path from `path_up`/`path_down` `transport`, else audit `session_start`, else **Path unknown**. | P09 |
+| D05 | Android system pairing handoff | Six-digit system code and optional pairing port from Android's dialog, sent with `session.pair_adb`. Explain separate Setu and Android trust steps. Handle `-32023` and `-32024`. Behind a flag until the device-lab run passes. | P05, P20 |
+| D06 | Corporate recovery panel | Map only typed codes (`-32014` to `-32018`, `-32024`, `-32025`, `-32026`) to the corresponding help. Device policy and grant failures point to the administrator. Invalid and expired credentials point to SSO; tokens rotate through the identity file or `auth.set_token` without a restart. | P11, P12, P13 |
+| D07 | Background and recovery | A tray restore preserves the session. Holding and lost banners come from `path_down`, `path_up` and `path_lost`, keyed by tunnel id. `-32025` and `-32026` show end states with a manual **Reconnect**. No deadline warning (no expiry signal). | P13, P14, P17, P21 |
 | D08 | This Computer's Audit Log | Lead with anchor status, then coverage, verifier details and JSON, CSV, or HTML export. The organization collector is external to this screen. | P15 |
 | D09 | Diagnostics | Run `doctor` and render returned checks, status, detail and fix hints. | P16 |
-| D10 | Settings | Set relay URL, leaf DER certificate pin, and HTTP CONNECT proxy. Provide local trust and workspace context. | P16, P17 |
+| D10 | Settings | Set computer name (`--label`), relay URL, leaf DER certificate pin, and HTTP CONNECT proxy. Applying restarts that workspace's daemon after confirming the live sessions it will end. Provide local trust and workspace context. | P16, P17, P22 |
 
 ### Prototype RPC boundary
 
-A native test host can provide `window.setuDesktopRpc(method, params)` before the prototype loads. It returns the decoded daemon result or rejects on an RPC error. The audit and diagnostics screens use `audit.verify`, `audit.report`, and `doctor` through this hook. The standalone wireframe uses labeled fixtures. A production host must keep credentials and process execution behind its trusted native boundary and allow only supported methods.
+A native test host can provide `window.setuDesktopRpc(method, params)` before the prototype loads. It returns the decoded daemon result or rejects on an RPC error. The audit and diagnostics screens use `audit.verify`, `audit.report`, and `doctor` through this hook. A production host allows only the v1.1.0 methods the screens bind: `version`, `doctor`, `identity.public_key`, `devices.list`, `devices.presence`, `devices.forget`, `session.connect`, `session.list`, `session.stop`, `session.cancel`, `session.pair_adb`, `auth.set_token`, `events.subscribe`, `audit.report` and `audit.verify`. The standalone wireframe uses labeled fixtures. A production host must keep credentials and process execution behind its trusted native boundary and allow only supported methods.
 
 ```mermaid
 flowchart LR
@@ -42,5 +42,8 @@ flowchart LR
     C --> D[Attach local ADB]
     D --> F[Device ready in IDE]
     D --> G[Unauthorized or offline recovery]
+    C --> P[Android 11+ debugger pairing via session.pair_adb]
+    P --> D
+    C --> R[Path events: holding, restored or lost]
     F --> H[Tray or disconnect selected session]
 ```
