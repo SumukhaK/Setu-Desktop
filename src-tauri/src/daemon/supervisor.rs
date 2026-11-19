@@ -1,12 +1,11 @@
 //! The supervisor task: spawn / attach / auth / restart-with-backoff / stop.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::config::DaemonConfig;
@@ -142,7 +141,7 @@ async fn stop_signal(stop_rx: &mut mpsc::Receiver<()>) {
 /// foreign daemon. The notification channel is the liveness probe.
 enum Running {
     Spawned {
-        child: Box<Child>,
+        child: Child,
         client: RpcClient,
         notifications: mpsc::UnboundedReceiver<Notification>,
         pid: u32,
@@ -160,7 +159,11 @@ async fn start_once(
     config: &DaemonConfig,
     options: &SupervisorOptions,
 ) -> Result<Running, String> {
-    if let Some(record) = read_attach_record(state_dir) {
+    if let Some(record) =
+        read_attach_record(state_dir).filter(|record| record.listen.ip().is_loopback())
+    {
+        // A record pointing outside loopback is treated as stale: the
+        // daemon token must never be sent to a non-loopback address.
         if let Some(token) = read_token(&state_dir.join("daemon.token")) {
             let attach = async {
                 let (client, notifications) = RpcClient::connect(record.listen).await.ok()?;
@@ -188,7 +191,8 @@ fn read_token(path: &Path) -> Option<String> {
 }
 
 /// Spawn the daemon, await and validate the ready line, authenticate, and
-/// write the attach record. Every failure path kills the child.
+/// write the attach record. Every failure path after spawn kills and waits
+/// for the child.
 async fn spawn_once(
     state_dir: &Path,
     config: &DaemonConfig,
@@ -202,31 +206,13 @@ async fn spawn_once(
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .stdout(Stdio::piped());
-    command.kill_on_drop(true);
-    let mut child = Box::new(
-        command
-            .spawn()
-            .map_err(|error| format!("failed to spawn the daemon executable: {error}"))?,
-    );
-
-    // One task reads all of stdout: it hands the supervisor the first line
-    // and keeps draining the rest in the background.
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn the daemon executable: {error}"))?;
     let stdout = child.stdout.take().expect("stdout is piped");
+
     let (line_tx, line_rx) = oneshot::channel::<String>();
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        let _ = reader.read_line(&mut line).await;
-        let _ = line_tx.send(line);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    });
+    drain_stdout(stdout, line_tx);
 
     let line = match tokio::time::timeout(options.ready_timeout, line_rx).await {
         Ok(Ok(line)) if !line.trim().is_empty() => line,
@@ -234,15 +220,14 @@ async fn spawn_once(
             return Err(kill_child(
                 child,
                 "daemon exited before printing daemon_ready".to_owned(),
-            )
-            .await)
+            ))
         }
         Err(_) => {
             let reason = format!(
                 "daemon did not print daemon_ready within {:?}",
                 options.ready_timeout
             );
-            return Err(kill_child(child, reason).await);
+            return Err(kill_child(child, reason));
         }
     };
     let ready = match parse(line.trim()) {
@@ -251,8 +236,7 @@ async fn spawn_once(
             return Err(kill_child(
                 child,
                 "daemon printed an invalid daemon_ready line".to_owned(),
-            )
-            .await)
+            ))
         }
     };
 
@@ -271,11 +255,12 @@ async fn spawn_once(
     .await;
     let (client, notifications) = match connected {
         Ok(Ok(connected)) => connected,
-        Ok(Err(reason)) => return Err(kill_child(child, reason).await),
+        Ok(Err(reason)) => return Err(kill_child(child, reason)),
         Err(_) => {
-            return Err(
-                kill_child(child, "connecting or authenticating timed out".to_owned()).await,
-            )
+            return Err(kill_child(
+                child,
+                "connecting or authenticating timed out".to_owned(),
+            ))
         }
     };
 
@@ -284,8 +269,17 @@ async fn spawn_once(
         pid: ready.pid,
         version: ready.version,
     };
-    write_attach_record(state_dir, &record)
-        .map_err(|error| format!("failed to write the attach record: {error}"))?;
+    match write_attach_record(state_dir, &record) {
+        Ok(()) => {}
+        // A live child must not be leaked: every failure path after spawn
+        // kills and waits.
+        Err(error) => {
+            return Err(kill_child(
+                child,
+                format!("failed to write the attach record: {error}"),
+            ))
+        }
+    };
     Ok(Running::Spawned {
         child,
         client,
@@ -294,10 +288,36 @@ async fn spawn_once(
     })
 }
 
-async fn kill_child(mut child: Box<Child>, reason: String) -> String {
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+/// Kill the child and wait for it to exit; both return promptly once it is
+/// killed.
+fn kill_child(mut child: Child, reason: String) -> String {
+    let _ = child.kill();
+    let _ = child.wait();
     reason
+}
+
+/// Drain the daemon's stdout on its own OS thread: the first line is sent
+/// to `first_line`, everything after it is discarded until EOF.
+///
+/// A dedicated thread — not a tokio task — keeps the pipe read off tokio's
+/// blocking pool: on Windows a pending pool read of a live daemon's pipe
+/// would make the runtime's shutdown wait forever, and the daemon must
+/// outlive the runtime (P17).
+fn drain_stdout(stdout: std::process::ChildStdout, first_line: oneshot::Sender<String>) {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let _ = reader.read_line(&mut line);
+        let _ = first_line.send(line);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    });
 }
 
 enum SuperviseOutcome {
@@ -307,7 +327,7 @@ enum SuperviseOutcome {
 
 /// Wait for the daemon to go away (EOF on the connection) or a stop request.
 async fn supervise(
-    child: &mut Option<Box<Child>>,
+    child: &mut Option<Child>,
     notifications: &mut mpsc::UnboundedReceiver<Notification>,
     stop_rx: &mut mpsc::Receiver<()>,
     state_tx: &watch::Sender<DaemonState>,
@@ -316,9 +336,9 @@ async fn supervise(
 ) -> SuperviseOutcome {
     tokio::select! {
         _ = stop_signal(stop_rx) => {
-            if let Some(child) = child.as_mut() {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+            if let Some(mut child) = child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
             }
             if owns_record {
                 remove_attach_record(state_dir);
@@ -327,11 +347,19 @@ async fn supervise(
             SuperviseOutcome::Stopped
         }
         _ = connection_end(notifications) => {
-            let reason = match child.as_mut() {
-                Some(child) => match child.wait().await {
-                    Ok(status) => format!("daemon exited unexpectedly ({status})"),
-                    Err(error) => format!("daemon exited unexpectedly ({error})"),
-                },
+            let reason = match child.take() {
+                Some(mut child) => {
+                    // Reap off the runtime thread; it completes as soon as
+                    // the exited process is collected.
+                    let outcome = tokio::task::spawn_blocking(move || child.wait()).await;
+                    match outcome {
+                        Ok(Ok(status)) => format!("daemon exited unexpectedly ({status})"),
+                        Ok(Err(error)) => format!("daemon exited unexpectedly ({error})"),
+                        Err(_) => {
+                            "daemon exited unexpectedly (the reaper task failed)".to_owned()
+                        }
+                    }
+                }
                 None => "attached daemon connection closed".to_owned(),
             };
             SuperviseOutcome::Exited(reason)
