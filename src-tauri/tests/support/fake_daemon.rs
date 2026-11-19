@@ -27,6 +27,8 @@ struct State {
     scripts: Mutex<HashMap<String, Vec<Scripted>>>,
     received: Mutex<Vec<Value>>,
     write: AsyncMutex<Option<OwnedWriteHalf>>,
+    /// Frames pushed before the client connected, flushed on connect.
+    queued: AsyncMutex<Vec<Vec<u8>>>,
 }
 
 /// A fake daemon connection for a single test.
@@ -46,6 +48,7 @@ impl FakeDaemon {
             scripts: Mutex::new(HashMap::new()),
             received: Mutex::new(Vec::new()),
             write: AsyncMutex::new(None),
+            queued: AsyncMutex::new(Vec::new()),
         });
         tokio::spawn(serve(listener, Arc::clone(&state)));
         Self { addr, state }
@@ -127,9 +130,15 @@ impl FakeDaemon {
     }
 
     async fn write_frame(&self, bytes: Vec<u8>) {
+        // Queue order matches registration order in `serve`, so a frame
+        // pushed while the client is connecting is never lost.
+        let mut queued = self.state.queued.lock().await;
         let mut write = self.state.write.lock().await;
-        if let Some(write) = write.as_mut() {
-            let _ = write.write_all(&bytes).await;
+        match write.as_mut() {
+            Some(write) => {
+                let _ = write.write_all(&bytes).await;
+            }
+            None => queued.push(bytes),
         }
     }
 }
@@ -141,7 +150,17 @@ async fn serve(listener: TcpListener, state: Arc<State>) {
         Err(_) => return,
     };
     let (read_half, write_half) = stream.into_split();
-    *state.write.lock().await = Some(write_half);
+    {
+        // Flush frames queued before the client connected, in order.
+        let mut queued = state.queued.lock().await;
+        let mut write = state.write.lock().await;
+        *write = Some(write_half);
+        for bytes in queued.drain(..) {
+            if let Some(write) = write.as_mut() {
+                let _ = write.write_all(&bytes).await;
+            }
+        }
+    }
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
     loop {
