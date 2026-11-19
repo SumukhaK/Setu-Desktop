@@ -10,7 +10,7 @@ Companion to the first architecture and UX audit against v1.0.1.
 
 Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobile's copy of this file.
 
-- [ ] DT-01 · JSON-RPC client core
+- [x] DT-01 · JSON-RPC client core · Done in [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3)
 - [ ] DT-02 · Daemon supervisor and workspaces
 - [ ] DT-03 · Event hub and session store
 - [ ] DT-04 · Solo pairing form with cancel
@@ -183,13 +183,13 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **SDK binding:** `auth`, `version`, the error table in API_SPEC §2.3.
 
 ### DT-02 · Daemon supervisor and workspaces
-- **Files:** `src-tauri/src/daemon/supervisor.rs`, `workspace.rs` (state dir per workspace: `<app-data>/setu/solo`, `<app-data>/setu/corp/<org-slug>`), `ready_line.rs`, `src-tauri/tauri.conf.json` (sidecar `setu-daemon`).
+- **Files:** `src-tauri/src/daemon/supervisor.rs`, `workspace.rs` (state dir per workspace: `<app-data>/setu/solo`, `<app-data>/setu/corp/<org-slug>`), `ready_line.rs`, `config.rs` (start flags), `src-tauri/tests/support/fake_setu_daemon.rs` (test binary). The sidecar entry in `tauri.conf.json` moved to DT-03 with the app shell (CODEBASE_MEMORY AD-6).
 - **Behaviour:** spawn `setu-daemon --listen 127.0.0.1:0 --state <dir> --relay <url> --label <name> --adb <path> [--relay-pin] [--proxy] [--mode corporate --identity-file <f> --policy <p>]`. Parse the one `daemon_ready` stdout line; read `token_file` in Rust only; `auth` on each connection; restart with backoff on exit; attach instead of spawning when a live daemon owns that state dir.
 - **Tests first:** P18, P17 (process survives window close).
 - **SDK binding:** daemon flags §2, `daemon_ready`, `auth`, `version`.
 
 ### DT-03 · Event hub and session store
-- **Files:** `src-tauri/src/events/hub.rs` (dedicated events connection, `events.subscribe`), `src/state/sessionStore.ts` (reducer keyed by client session `s1…` and tunnel id), `src/state/clock.ts` (monotonic, injectable).
+- **Files:** Tauri v2 app shell (`src-tauri/tauri.conf.json` with sidecar `setu-daemon`, `main.rs`, single-instance plugin) and the `src/` scaffold (Vite, React, TS strict, ESLint, Prettier, Vitest), then `src-tauri/src/events/hub.rs` (dedicated events connection, `events.subscribe`), `src/state/sessionStore.ts` (reducer keyed by client session `s1…` and tunnel id), `src/state/clock.ts` (monotonic, injectable).
 - **Tests first:** P21, P17 restore, out-of-order and stale-session events ignored (part of P14).
 - **SDK binding:** `events.subscribe`, the `event` and `events.dropped` notifications, `session.list`, event types §1.5.
 
