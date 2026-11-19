@@ -1,29 +1,22 @@
 # Setu Desktop
 
-Three clickable design directions for the Setu desktop companion on Windows, macOS, and Linux. The developer can pair or select a phone, attach ADB or an IDE, keep the tunnel running in the background, and review or share evidence from a session.
+Browser wireframes for the Setu desktop companion on Windows, macOS, and Linux. The selected design combines the Relay workspace layout with the Signal status strip. The strip keeps the authenticated local listener, local ADB attachment, and observed transport separate.
 
-## Narrated walkthrough
+[Current workspace preview](docs/previews/current.png) · [Screen inventory and wireframes](docs/SCREENS.md) · [Canonical journeys and TDD acceptance tests](docs/JOURNEYS.md)
 
-Watch **Relay on desktop and Field on Android** in a 7:05 walkthrough. Follow both sides from email signup and phone readiness through pairing, ADB attachment, backgrounding, evidence sharing, and corporate audit. The video uses prototype screens and simulated sessions.
+## Open the current prototype
+
+Open `index.html` in a browser and use the scenario menu to review different SDK responses. Solo starts locally. Pair using the sample code shown in the pairing screen, or choose a saved device. In Corporate, use the device ID and inspect grant, revocation, credential, and device-policy examples. Review **This Computer's Audit Log** and **Diagnostics** separately from the session workspace.
+
+The wireframe uses fixtures. The canonical journeys specify which actions map directly to Setu SDK v1.0.1, which require native application work, and which depend on new SDK or organization services.
+
+<details>
+<summary>Historical walkthrough from before the SDK audit</summary>
+
+This earlier recording includes concepts superseded by the current wireframes, including email verification, phone approval, and evidence sharing.
 
 https://github.com/user-attachments/assets/262dec47-998c-41a3-8a8a-dccc3fd21296
 
 [Chapters and transcript](docs/walkthrough/TRANSCRIPT.md) · [English captions](docs/walkthrough/setu-walkthrough.en.vtt) · [Download MP4](docs/walkthrough/setu-walkthrough.mp4)
 
-## Open the prototype
-
-Open `index.html` in a browser. Choose **Relay**, **Signal**, or **Field** in the top bar. **Demo scenarios** loads example accounts and connections so you can compare the same tasks in each design. The prototype uses fictional data and runs locally without a build step.
-
-| Direction | Layout | Preview |
-| --- | --- | --- |
-| Relay | Light, cobalt-accented workspace with sidebar navigation and a prominent device session. | [Screenshot](docs/previews/relay.png) |
-| Signal | Dark, mint-accented console with the transport, local ADB endpoint, and event timeline in view. | [Screenshot](docs/previews/signal.png) |
-| Field | Warm, plum-accented desk with more room for session context and tester evidence. | [Screenshot](docs/previews/field.png) |
-
-## Review the critical paths
-
-1. Start with email onboarding or open a Solo workspace. Pair a new device, inspect the difference between tunnel readiness and ADB attachment, and open its IDE handoff instructions.
-2. Use the tray preview to keep debugging in the background. Restore the session, try a connection recovery, and then disconnect.
-3. Review a screenshot or recording and add context before sharing. Open the managed workspace and inspect its Solo lock, allowed and denied access, audit history, and report export.
-
-The [journey map](docs/JOURNEYS.md) describes recovery paths, research references, and the proposed integration boundaries. Authentication, ADB, the operating system tray, and corporate access use simulated states in this design round.
+</details>
