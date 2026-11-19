@@ -10,6 +10,19 @@ Open `index.html` in a browser and use the scenario menu to review different SDK
 
 The wireframe uses fixtures. The canonical journeys specify which actions map directly to Setu SDK v1.0.1, which require native application work, and which depend on new SDK or organization services.
 
+## Build the native core
+
+The Rust native core lives in `src-tauri/`. It's a plain library for now; the Tauri app shell and the React UI arrive in later tickets. You need a stable Rust toolchain.
+
+```sh
+cd src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Work is tracked ticket by ticket in [docs/TDD_TICKETS.md](docs/TDD_TICKETS.md). Builders start from [docs/prompts/CURRENT_TASK.md](docs/prompts/CURRENT_TASK.md).
+
 <details>
 <summary>Historical walkthrough from before the SDK audit</summary>
 
