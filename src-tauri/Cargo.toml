@@ -9,4 +9,13 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "macros", "time", "process"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "fake-setu-daemon"
+path = "tests/support/fake_setu_daemon.rs"
+test = false
+doc = false
