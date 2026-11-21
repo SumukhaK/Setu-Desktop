@@ -1,0 +1,9 @@
+node_modules/
+dist/
+docs/
+src-tauri/
+index.html
+prototype.js
+styles.css
+package-lock.json
+README.md
