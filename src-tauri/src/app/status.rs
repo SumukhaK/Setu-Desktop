@@ -27,19 +27,51 @@ pub enum AppStatus {
     Stopped,
 }
 
-pub fn status_of(_state: &DaemonState, _version: Option<String>) -> AppStatus {
-    AppStatus::Stopped
+pub fn status_of(state: &DaemonState, version: Option<String>) -> AppStatus {
+    match state {
+        DaemonState::Starting => AppStatus::Starting,
+        DaemonState::Ready {
+            generation,
+            attached,
+            ..
+        } => AppStatus::Ready {
+            version,
+            attached: *attached,
+            generation: *generation,
+        },
+        DaemonState::Restarting { attempt, retry_in } => AppStatus::Restarting {
+            attempt: *attempt,
+            retry_in_ms: u64::try_from(retry_in.as_millis()).unwrap_or(u64::MAX),
+        },
+        DaemonState::Failed { reason } => AppStatus::Failed {
+            reason: reason.clone(),
+        },
+        DaemonState::Stopped => AppStatus::Stopped,
+    }
 }
 
-pub fn resolve_daemon_path(_env_override: Option<OsString>, _exe_dir: &Path) -> PathBuf {
-    PathBuf::new()
+pub fn resolve_daemon_path(env_override: Option<OsString>, exe_dir: &Path) -> PathBuf {
+    env_override
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| exe_dir.join(format!("setu-daemon{}", std::env::consts::EXE_SUFFIX)))
 }
 
 pub fn resolve_relay(
-    _runtime: Option<String>,
-    _compile_time: Option<&'static str>,
+    runtime: Option<String>,
+    compile_time: Option<&'static str>,
 ) -> Option<String> {
-    None
+    runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            compile_time
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
 }
 
 #[cfg(test)]
@@ -164,8 +196,7 @@ mod tests {
             drop(stream);
         });
 
-        let (client, _notifications) =
-            crate::rpc::RpcClient::connect(addr).await.expect("connect");
+        let (client, _notifications) = crate::rpc::RpcClient::connect(addr).await.expect("connect");
         let state = DaemonState::Ready {
             client,
             generation: 7,
