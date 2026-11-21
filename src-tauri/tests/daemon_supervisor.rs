@@ -82,6 +82,7 @@ async fn wait_ready(rx: &mut watch::Receiver<DaemonState>) -> (RpcClient, u64, u
             generation,
             pid,
             attached,
+            ..
         } => (client, generation, pid, attached),
         _ => panic!("expected a Ready state"),
     }
@@ -167,6 +168,11 @@ async fn a_fresh_workspace_spawns_the_daemon_and_reaches_ready() {
     let record = read_attach_record(&state_dir).expect("attach record written");
     assert_eq!(record.pid, pid);
     assert_eq!(record.version, "1.1.0");
+    let ready_listen = match &*rx.borrow_and_update() {
+        DaemonState::Ready { listen, .. } => *listen,
+        _ => panic!("expected a Ready state"),
+    };
+    assert_eq!(ready_listen, record.listen);
     let record_text = std::fs::read_to_string(attach_record_path(&state_dir)).unwrap();
     assert!(
         !record_text.contains("token"),

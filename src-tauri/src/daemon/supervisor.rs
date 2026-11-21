@@ -1,6 +1,7 @@
 //! The supervisor task: spawn / attach / auth / restart-with-backoff / stop.
 
 use std::io::{BufRead, BufReader};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use super::ready_line::parse;
 use super::workspace::{
     read_attach_record, remove_attach_record, write_attach_record, AttachRecord, Workspace,
 };
-use crate::rpc::{Notification, RpcClient};
+use crate::rpc::{Notification, RpcClient, SetuError};
 
 /// Consecutive failed attempts before the supervisor gives up.
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
@@ -43,6 +44,7 @@ pub enum DaemonState {
     Starting,
     Ready {
         client: RpcClient,
+        listen: SocketAddr,
         generation: u64,
         pid: u32,
         attached: bool,
@@ -143,11 +145,13 @@ enum Running {
     Spawned {
         child: Child,
         client: RpcClient,
+        listen: SocketAddr,
         notifications: mpsc::UnboundedReceiver<Notification>,
         pid: u32,
     },
     Attached {
         client: RpcClient,
+        listen: SocketAddr,
         notifications: mpsc::UnboundedReceiver<Notification>,
         pid: u32,
     },
@@ -170,6 +174,7 @@ async fn start_once(
                 client.auth(&token).await.ok()?;
                 Some(Running::Attached {
                     client,
+                    listen: record.listen,
                     notifications,
                     pid: record.pid,
                 })
@@ -188,6 +193,24 @@ fn read_token(path: &Path) -> Option<String> {
         .ok()
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty())
+}
+
+/// Connect to a loopback daemon and authenticate with `<state_dir>/daemon.token`.
+///
+/// A non-loopback address and a missing or empty token both return
+/// `Unauthorized` without contacting the address (AD-10). The token never
+/// leaves `daemon/`.
+pub async fn connect_authenticated(
+    listen: SocketAddr,
+    state_dir: &Path,
+) -> Result<(RpcClient, mpsc::UnboundedReceiver<Notification>), SetuError> {
+    if !listen.ip().is_loopback() {
+        return Err(SetuError::Unauthorized);
+    }
+    let token = read_token(&state_dir.join("daemon.token")).ok_or(SetuError::Unauthorized)?;
+    let (client, notifications) = RpcClient::connect(listen).await?;
+    client.auth(&token).await?;
+    Ok((client, notifications))
 }
 
 /// Spawn the daemon, await and validate the ready line, authenticate, and
@@ -283,6 +306,7 @@ async fn spawn_once(
     Ok(Running::Spawned {
         child,
         client,
+        listen: ready.listen,
         notifications,
         pid: ready.pid,
     })
@@ -410,22 +434,25 @@ async fn run(
         }
         match start_once(&state_dir, &config, &options).await {
             Ok(running) => {
-                let (client, mut notifications, pid, attached, mut child) = match running {
+                let (client, listen, mut notifications, pid, attached, mut child) = match running {
                     Running::Spawned {
                         child,
                         client,
+                        listen,
                         notifications,
                         pid,
-                    } => (client, notifications, pid, false, Some(child)),
+                    } => (client, listen, notifications, pid, false, Some(child)),
                     Running::Attached {
                         client,
+                        listen,
                         notifications,
                         pid,
-                    } => (client, notifications, pid, true, None),
+                    } => (client, listen, notifications, pid, true, None),
                 };
                 owns_record = !attached;
                 let _ = state_tx.send(DaemonState::Ready {
                     client,
+                    listen,
                     generation,
                     pid,
                     attached,

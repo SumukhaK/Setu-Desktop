@@ -7,7 +7,7 @@ mod workspace;
 
 pub use config::{CorporateFlags, DaemonConfig};
 pub use ready_line::{parse, ReadyLine};
-pub use supervisor::{DaemonState, Supervisor, SupervisorOptions};
+pub use supervisor::{connect_authenticated, DaemonState, Supervisor, SupervisorOptions};
 pub use workspace::{
     attach_record_path, read_attach_record, remove_attach_record, write_attach_record,
     AttachRecord, Workspace,
