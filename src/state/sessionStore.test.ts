@@ -46,7 +46,10 @@ const synced = (sessions: SessionInfo[], epoch = 1): SessionStoreState => ({
   epoch,
   generation: 1,
   live: Object.fromEntries(
-    sessions.map((session) => [session.session_id, { ...live(session.session_id), deviceId: session.device_id }]),
+    sessions.map((session) => [
+      session.session_id,
+      { ...live(session.session_id), deviceId: session.device_id },
+    ]),
   ),
   ended: [],
 });
@@ -71,14 +74,14 @@ describe("reduce", () => {
     const state = synced([info("s1")], 2);
     expect(reduce(state, snap(1, []), 0)).toEqual(state);
     expect(
-      reduce(
-        state,
-        message({ type: "session_down", session: "s1", abnormal: false }, 1),
-        0,
-      ),
+      reduce(state, message({ type: "session_down", session: "s1", abnormal: false }, 1), 0),
     ).toEqual(state);
     expect(
-      reduce(initialState, message({ type: "session_up", session: "s1", addr: "a", device_id: "d" }), 0),
+      reduce(
+        initialState,
+        message({ type: "session_up", session: "s1", addr: "a", device_id: "d" }),
+        0,
+      ),
     ).toEqual(initialState);
   });
 
@@ -183,7 +186,12 @@ describe("reduce", () => {
   it("peer_closed wins over a later session_down", () => {
     const first = reduce(
       synced([info("s1")]),
-      message({ type: "peer_closed", session: "s1", device_id: "pixel-7", peer_reason: "ended_on_device" }),
+      message({
+        type: "peer_closed",
+        session: "s1",
+        device_id: "pixel-7",
+        peer_reason: "ended_on_device",
+      }),
       10,
     );
     const second = reduce(
@@ -213,7 +221,7 @@ describe("reduce", () => {
   it("keeps at most twenty ended sessions, newest first", () => {
     let state = synced([info("s1")]);
     for (let index = 0; index < 25; index += 1) {
-      const id = `s${index}`;
+      const id = `s${String(index)}`;
       state = { ...state, live: { ...state.live, [id]: live(id) } };
       state = reduce(state, message({ type: "session_down", session: id, abnormal: false }), index);
     }
@@ -241,7 +249,11 @@ describe("reduce", () => {
     Object.freeze(state.live);
     Object.freeze(state.ended);
     Object.freeze(state);
-    const next = reduce(state, message({ type: "retrying", session: "s1", attempt: 1, delay_ms: 10 }), 0);
+    const next = reduce(
+      state,
+      message({ type: "retrying", session: "s1", attempt: 1, delay_ms: 10 }),
+      0,
+    );
     expect(next).not.toBe(state);
     expect(next.live.s1?.status).toBe("retrying");
   });

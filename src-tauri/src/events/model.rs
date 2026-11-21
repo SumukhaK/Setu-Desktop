@@ -91,13 +91,103 @@ pub enum Parsed {
 }
 
 /// Parse one daemon notification into the allowlisted, secret-free bridge.
-pub fn parse_notification(_notification: &Notification) -> Parsed {
-    Parsed::Ignored
+pub fn parse_notification(notification: &Notification) -> Parsed {
+    match notification.method.as_str() {
+        "events.dropped" => notification
+            .params
+            .get("count")
+            .and_then(Value::as_u64)
+            .map_or(Parsed::Ignored, |count| Parsed::Dropped { count }),
+        "event" => parse_event(&notification.params).map_or(Parsed::Ignored, Parsed::Event),
+        _ => Parsed::Ignored,
+    }
 }
 
-/// Strictly parse the `session.list` result.
-pub fn parse_session_list(_value: &Value) -> Result<Vec<SessionInfo>, SetuError> {
-    Err(SetuError::UnexpectedResult)
+/// Only §1.5 types with every required field of the right type cross the
+/// bridge. Error strings (`retrying.error`, `session_down.error`) are dropped.
+fn parse_event(params: &Value) -> Option<HubEvent> {
+    let typ = params.get("type").and_then(Value::as_str)?;
+    let session = params.get("session").and_then(Value::as_str)?;
+    if session.is_empty() {
+        return None;
+    }
+    let fields = params.get("fields");
+    let text = |key: &str| {
+        fields
+            .and_then(|fields| fields.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    let number = |key: &str| {
+        fields
+            .and_then(|fields| fields.get(key))
+            .and_then(Value::as_u64)
+    };
+    let session = session.to_owned();
+
+    let event = match typ {
+        "listening" => HubEvent::Listening {
+            session,
+            addr: text("addr")?,
+            device_id: text("device_id")?,
+        },
+        "session_up" => HubEvent::SessionUp {
+            session,
+            addr: text("addr")?,
+            device_id: text("device_id")?,
+        },
+        "retrying" => HubEvent::Retrying {
+            session,
+            attempt: u32::try_from(number("attempt")?).ok()?,
+            delay_ms: number("delay_ms")?,
+        },
+        "session_down" => HubEvent::SessionDown {
+            session,
+            abnormal: fields.and_then(|fields| fields.get("error")).is_some(),
+        },
+        "path_down" => HubEvent::PathDown {
+            session,
+            tunnel_id: text("session_id")?,
+            reason: text("reason")?,
+            transport: text("transport")?,
+        },
+        "path_up" => HubEvent::PathUp {
+            session,
+            tunnel_id: text("session_id")?,
+            transport: text("transport")?,
+            outage_ms: number("outage_ms")?,
+        },
+        "path_lost" => HubEvent::PathLost {
+            session,
+            tunnel_id: text("session_id")?,
+            reason: text("reason")?,
+            outage_ms: number("outage_ms")?,
+        },
+        "session_expired" => HubEvent::SessionExpired {
+            session,
+            device_id: text("device_id")?,
+            reason: text("reason")?,
+        },
+        "peer_closed" => HubEvent::PeerClosed {
+            session,
+            device_id: text("device_id")?,
+            peer_reason: text("peer_reason")?,
+        },
+        _ => return None,
+    };
+    Some(event)
+}
+
+#[derive(Deserialize)]
+struct SessionList {
+    sessions: Vec<SessionInfo>,
+}
+
+/// Strictly parse the `session.list` result; a bad shape is a failed list.
+pub fn parse_session_list(value: &Value) -> Result<Vec<SessionInfo>, SetuError> {
+    serde_json::from_value::<SessionList>(value.clone())
+        .map(|list| list.sessions)
+        .map_err(|_| SetuError::UnexpectedResult)
 }
 
 #[cfg(test)]
@@ -304,7 +394,10 @@ mod tests {
             method: "events.dropped".to_owned(),
             params: json!({ "count": 17 }),
         };
-        assert_eq!(parse_notification(&notification), Parsed::Dropped { count: 17 });
+        assert_eq!(
+            parse_notification(&notification),
+            Parsed::Dropped { count: 17 }
+        );
     }
 
     #[test]

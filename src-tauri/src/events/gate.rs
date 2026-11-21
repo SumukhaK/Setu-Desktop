@@ -7,32 +7,106 @@ pub enum Action {
     ListSessions,
 }
 
-pub struct ResyncGate;
+enum GateState {
+    Live,
+    Resyncing { buffer: Vec<HubEvent>, again: bool },
+}
+
+/// Owns the epoch and guarantees that a snapshot precedes the events that
+/// arrived while `session.list` was in flight.
+pub struct ResyncGate {
+    epoch: u64,
+    generation: u64,
+    state: GateState,
+}
+
+impl Default for ResyncGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ResyncGate {
     pub fn new() -> Self {
-        Self
+        Self {
+            epoch: 0,
+            generation: 0,
+            state: GateState::Live,
+        }
     }
 
-    pub fn begin(&mut self, _generation: u64) -> Action {
+    /// Called once for each new connection.
+    pub fn begin(&mut self, generation: u64) -> Action {
+        self.epoch += 1;
+        self.generation = generation;
+        self.state = GateState::Resyncing {
+            buffer: Vec::new(),
+            again: false,
+        };
         Action::ListSessions
     }
 
+    /// `events.dropped` or the UI's `session_resync`. While already resyncing,
+    /// the buffered events predate the gap and are discarded; the caller will
+    /// be asked for a second list when the current one returns.
     pub fn request_resync(&mut self) -> Option<Action> {
-        None
+        match &mut self.state {
+            GateState::Live => {
+                self.epoch += 1;
+                self.state = GateState::Resyncing {
+                    buffer: Vec::new(),
+                    again: false,
+                };
+                Some(Action::ListSessions)
+            }
+            GateState::Resyncing { buffer, again } => {
+                buffer.clear();
+                *again = true;
+                None
+            }
+        }
     }
 
-    pub fn on_event(&mut self, _event: HubEvent) -> Vec<HubMessage> {
-        Vec::new()
+    pub fn on_event(&mut self, event: HubEvent) -> Vec<HubMessage> {
+        match &mut self.state {
+            GateState::Live => vec![HubMessage::Event {
+                epoch: self.epoch,
+                generation: self.generation,
+                event,
+            }],
+            GateState::Resyncing { buffer, .. } => {
+                buffer.push(event);
+                Vec::new()
+            }
+        }
     }
 
     /// Corporate `devices.presence` resync is DT-15; this gate only owns
     /// `session.list` ordering for now.
-    pub fn on_sessions(
-        &mut self,
-        _sessions: Vec<SessionInfo>,
-    ) -> (Vec<HubMessage>, Option<Action>) {
-        (Vec::new(), None)
+    pub fn on_sessions(&mut self, sessions: Vec<SessionInfo>) -> (Vec<HubMessage>, Option<Action>) {
+        let (again, buffer) = match &mut self.state {
+            GateState::Live => return (Vec::new(), None),
+            GateState::Resyncing { buffer, again } => (*again, std::mem::take(buffer)),
+        };
+        if again {
+            self.state = GateState::Resyncing {
+                buffer: Vec::new(),
+                again: false,
+            };
+            return (Vec::new(), Some(Action::ListSessions));
+        }
+        let mut messages = vec![HubMessage::Snapshot {
+            epoch: self.epoch,
+            generation: self.generation,
+            sessions,
+        }];
+        messages.extend(buffer.into_iter().map(|event| HubMessage::Event {
+            epoch: self.epoch,
+            generation: self.generation,
+            event,
+        }));
+        self.state = GateState::Live;
+        (messages, None)
     }
 }
 

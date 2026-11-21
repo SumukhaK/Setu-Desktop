@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import type { DaemonPort, DaemonStatus } from "../daemon/status";
+import type { HubMessage } from "../state/sessionStore";
 import type { SessionHubPort } from "../state/useSessions";
 
 export const tauriDaemonPort: DaemonPort = {
@@ -16,10 +17,12 @@ export const tauriDaemonPort: DaemonPort = {
 };
 
 export const tauriSessionHubPort: SessionHubPort = {
-  subscribe() {
-    return Promise.resolve(() => undefined);
-  },
   resync() {
-    return Promise.resolve();
+    return invoke<undefined>("session_resync");
+  },
+  subscribe(onMessage) {
+    return listen<HubMessage>("session-hub", (event) => {
+      onMessage(event.payload);
+    });
   },
 };

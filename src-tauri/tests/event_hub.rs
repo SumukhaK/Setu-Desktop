@@ -1,7 +1,6 @@
 //! DT-03b integration tests: one ordered, secret-free session stream (P21, P18, P17).
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -44,12 +43,9 @@ async fn next(rx: &mut mpsc::UnboundedReceiver<HubMessage>) -> HubMessage {
 }
 
 async fn expect_silent(rx: &mut mpsc::UnboundedReceiver<HubMessage>, millis: u64) {
-    assert!(
-        timeout(Duration::from_millis(millis), rx.recv())
-            .await
-            .is_err(),
-        "an unexpected message arrived early"
-    );
+    if let Ok(message) = timeout(Duration::from_millis(millis), rx.recv()).await {
+        panic!("an unexpected message arrived early: {message:?}");
+    }
 }
 
 fn epoch_of(message: &HubMessage) -> u64 {
@@ -70,7 +66,6 @@ fn snapshot_ids(message: &HubMessage) -> Vec<String> {
 
 struct Harness {
     _tmp: TempDir,
-    state_dir: PathBuf,
     fake: FakeDaemon,
     client: RpcClient,
     tx: watch::Sender<DaemonState>,
@@ -94,7 +89,6 @@ impl Harness {
         let (hub, messages) = start(states, state_dir.clone());
         Self {
             _tmp: tmp,
-            state_dir,
             fake,
             client,
             tx,
@@ -211,15 +205,14 @@ async fn p18_a_new_generation_reconnects_and_relists() {
     fake2.reply_with("events.subscribe", json!({ "subscribed": true }));
     fake2.reply_with("session.list", json!({ "sessions": [session_info("s2")] }));
 
-    h.tx
-        .send(DaemonState::Ready {
-            client: client2,
-            listen: fake2.addr(),
-            generation: 2,
-            pid: 2,
-            attached: false,
-        })
-        .unwrap();
+    h.tx.send(DaemonState::Ready {
+        client: client2,
+        listen: fake2.addr(),
+        generation: 2,
+        pid: 2,
+        attached: false,
+    })
+    .unwrap();
 
     let message = next(&mut h.messages).await;
     match &message {
@@ -271,6 +264,8 @@ async fn p17_resync_relists_without_stopping_sessions() {
     let first = next(&mut h.messages).await;
     let first_epoch = epoch_of(&first);
 
+    h.fake
+        .reply_with("session.list", json!({ "sessions": [session_info("s1")] }));
     h.hub.resync();
     let second = next(&mut h.messages).await;
     assert_eq!(snapshot_ids(&second), vec!["s1"]);
@@ -279,16 +274,37 @@ async fn p17_resync_relists_without_stopping_sessions() {
     drop(h.hub);
     tokio::time::sleep(Duration::from_millis(200)).await;
     let received = h.fake.received();
-    assert!(
-        !received
-            .iter()
-            .any(|request| request["method"] == "session.stop")
+    assert!(!received
+        .iter()
+        .any(|request| request["method"] == "session.stop"));
+    assert!(!received
+        .iter()
+        .any(|request| request["method"] == "events.unsubscribe"));
+}
+
+#[tokio::test]
+async fn a_failed_list_is_unavailable_and_a_raw_unknown_event_is_ignored() {
+    let mut h = Harness::new().await;
+    h.fake.reply_with("auth", json!({ "ok": true }));
+    h.fake
+        .reply_with("events.subscribe", json!({ "subscribed": true }));
+    h.fake.reply_with_error(
+        "session.list",
+        json!({ "code": -32601, "message": "method not found" }),
     );
-    assert!(
-        !received
-            .iter()
-            .any(|request| request["method"] == "events.unsubscribe")
+    h.ready(1, h.fake.addr()).await;
+
+    assert_eq!(
+        next(&mut h.messages).await,
+        HubMessage::Unavailable { generation: 1 }
     );
+
+    h.fake
+        .send_raw(
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{\"type\":\"future_thing\",\"session\":\"s1\",\"fields\":{}}}\n",
+        )
+        .await;
+    expect_silent(&mut h.messages, 150).await;
 }
 
 #[tokio::test]

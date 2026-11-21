@@ -16,10 +16,12 @@ mod shell {
 
     use crate::app::status::{resolve_daemon_path, resolve_relay, status_of, AppStatus};
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
+    use crate::events::{start as start_event_hub, EventHub};
 
     struct AppState {
         status: Mutex<AppStatus>,
         _supervisor: Option<Supervisor>,
+        hub: Option<EventHub>,
     }
 
     fn lock_status(state: &AppState) -> MutexGuard<'_, AppStatus> {
@@ -29,6 +31,13 @@ mod shell {
     #[tauri::command]
     fn daemon_status(state: tauri::State<'_, AppState>) -> AppStatus {
         lock_status(&state).clone()
+    }
+
+    #[tauri::command]
+    fn session_resync(state: tauri::State<'_, AppState>) {
+        if let Some(hub) = &state.hub {
+            hub.resync();
+        }
     }
 
     /// Start the window and, when a relay is configured, the Solo supervisor.
@@ -43,7 +52,7 @@ mod shell {
                     let _ = window.set_focus();
                 }
             }))
-            .invoke_handler(tauri::generate_handler![daemon_status])
+            .invoke_handler(tauri::generate_handler![daemon_status, session_resync])
             .setup(|app| {
                 let relay = resolve_relay(
                     std::env::var("SETU_RELAY_URL").ok(),
@@ -54,9 +63,10 @@ mod shell {
                     None => AppStatus::NotConfigured,
                 };
 
+                let app_data = app.path().app_data_dir()?;
+                let state_dir = Workspace::Solo.state_dir(&app_data);
                 let supervisor = match relay {
                     Some(relay) => {
-                        let app_data = app.path().app_data_dir()?;
                         let exe_dir = std::env::current_exe()
                             .ok()
                             .and_then(|exe| exe.parent().map(PathBuf::from))
@@ -86,10 +96,26 @@ mod shell {
                 };
 
                 let states = supervisor.as_ref().map(Supervisor::subscribe);
+                let hub_pair = states.as_ref().map(|receiver| {
+                    let receiver = receiver.clone();
+                    tauri::async_runtime::block_on(
+                        async move { start_event_hub(receiver, state_dir) },
+                    )
+                });
                 app.manage(AppState {
                     status: Mutex::new(initial),
                     _supervisor: supervisor,
+                    hub: hub_pair.as_ref().map(|(hub, _)| hub.clone()),
                 });
+
+                if let Some((_, mut messages)) = hub_pair {
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        while let Some(message) = messages.recv().await {
+                            let _ = handle.emit("session-hub", &message);
+                        }
+                    });
+                }
 
                 if let Some(mut states) = states {
                     let handle = app.handle().clone();

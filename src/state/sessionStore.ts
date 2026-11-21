@@ -76,6 +76,8 @@ export interface SessionStoreState {
   ended: EndedSession[];
 }
 
+const MAX_ENDED = 20;
+
 export const initialState: SessionStoreState = {
   synced: false,
   epoch: 0,
@@ -86,9 +88,121 @@ export const initialState: SessionStoreState = {
 
 export function reduce(
   state: SessionStoreState,
-  _message: HubMessage,
-  _now: number,
+  message: HubMessage,
+  now: number,
 ): SessionStoreState {
-  return state;
+  if (message.kind === "snapshot") {
+    if (message.epoch < state.epoch) {
+      return state;
+    }
+    const live = Object.fromEntries(
+      message.sessions.map((session) => {
+        const previous = state.live[session.session_id];
+        const next: LiveSession = {
+          sessionId: session.session_id,
+          deviceId: session.device_id,
+          adbAddr: session.adb_addr,
+          started: session.started,
+          status: "up",
+          transport: previous?.transport ?? null,
+          tunnels: previous?.tunnels ?? {},
+        };
+        return [session.session_id, next];
+      }),
+    );
+    return {
+      synced: true,
+      epoch: message.epoch,
+      generation: message.generation,
+      live,
+      ended: state.ended,
+    };
+  }
+  if (message.kind === "unavailable") {
+    return { ...state, synced: false, live: {} };
+  }
+  return reduceEvent(state, message, now);
 }
 
+function reduceEvent(
+  state: SessionStoreState,
+  message: Extract<HubMessage, { kind: "event" }>,
+  now: number,
+): SessionStoreState {
+  if (!state.synced || message.epoch !== state.epoch) {
+    return state;
+  }
+  const event = message.event;
+
+  if (event.type === "listening" || event.type === "session_up") {
+    const previous = state.live[event.session];
+    const next: LiveSession = {
+      sessionId: event.session,
+      deviceId: event.device_id,
+      adbAddr: event.addr,
+      started: previous?.started ?? null,
+      status: event.type === "listening" ? "listening" : "up",
+      transport: previous?.transport ?? null,
+      tunnels: previous?.tunnels ?? {},
+    };
+    return { ...state, live: { ...state.live, [event.session]: next } };
+  }
+
+  if (event.type === "retrying") {
+    const previous = state.live[event.session];
+    if (previous === undefined) {
+      return state;
+    }
+    return {
+      ...state,
+      live: { ...state.live, [event.session]: { ...previous, status: "retrying" } },
+    };
+  }
+
+  if (
+    event.type === "session_down" ||
+    event.type === "peer_closed" ||
+    event.type === "session_expired"
+  ) {
+    const previous = state.live[event.session];
+    if (previous === undefined) {
+      return state;
+    }
+    const reason: EndReason =
+      event.type === "session_down" ? (event.abnormal ? "error" : "closed") : event.type;
+    const ended: EndedSession = {
+      sessionId: event.session,
+      deviceId: event.type === "session_down" ? previous.deviceId : event.device_id,
+      reason,
+      at: now,
+    };
+    const live = Object.fromEntries(
+      Object.entries(state.live).filter(([sessionId]) => sessionId !== event.session),
+    );
+    return { ...state, live, ended: [ended, ...state.ended].slice(0, MAX_ENDED) };
+  }
+
+  const previous = state.live[event.session];
+  if (previous === undefined || previous.tunnels[event.tunnel_id]?.state === "lost") {
+    return state;
+  }
+  const tunnels = { ...previous.tunnels };
+  let transport = previous.transport;
+  if (event.type === "path_down") {
+    tunnels[event.tunnel_id] = {
+      state: "down",
+      since: now,
+      reason: event.reason,
+      transport: event.transport,
+    };
+  } else if (event.type === "path_up") {
+    tunnels[event.tunnel_id] = { state: "up", transport: event.transport };
+    transport = event.transport;
+  } else {
+    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason };
+  }
+  return {
+    ...state,
+    live: { ...state.live, [event.session]: { ...previous, transport, tunnels } },
+  };
+}
