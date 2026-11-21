@@ -14,8 +14,19 @@ use crate::rpc::{RpcClient, SetuError};
 pub struct PairingCode(String);
 
 impl PairingCode {
-    pub fn parse(_raw: &str) -> Option<Self> {
-        None
+    pub fn parse(raw: &str) -> Option<Self> {
+        let bytes = raw.as_bytes();
+        if bytes.len() != 11 || bytes[4] != b'-' {
+            return None;
+        }
+        if bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| index != 4 && !byte.is_ascii_digit())
+        {
+            return None;
+        }
+        Some(Self(raw.to_owned()))
     }
 
     fn as_str(&self) -> &str {
@@ -45,16 +56,74 @@ pub enum ConnectOutcome {
 #[derive(Default)]
 pub struct PendingConnect(Mutex<Option<oneshot::Sender<()>>>);
 
-pub async fn connect_with_code(
-    _client: Option<RpcClient>,
-    _raw: &str,
-    _pending: &PendingConnect,
-) -> ConnectOutcome {
-    ConnectOutcome::Malformed
+/// Clear the slot on every exit path, including cancellation and errors.
+struct SlotGuard<'a>(&'a PendingConnect);
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .0
+             .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+    }
 }
 
-pub fn cancel_pending(_pending: &PendingConnect) -> bool {
-    false
+pub async fn connect_with_code(
+    client: Option<RpcClient>,
+    raw: &str,
+    pending: &PendingConnect,
+) -> ConnectOutcome {
+    let Some(code) = PairingCode::parse(raw) else {
+        return ConnectOutcome::Malformed;
+    };
+    let Some(client) = client else {
+        return ConnectOutcome::NotReady;
+    };
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    {
+        let mut slot = pending.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_some() {
+            return ConnectOutcome::AlreadyPending;
+        }
+        *slot = Some(cancel_tx);
+    }
+    let _guard = SlotGuard(pending);
+
+    let result = client
+        .call_cancellable(
+            "session.connect",
+            Some(json!({ "pairing_code": code.as_str(), "timeout_ms": 60000 })),
+            cancel_rx,
+        )
+        .await;
+    match result {
+        Ok(value) => match serde_json::from_value::<SessionInfo>(value) {
+            Ok(info) => ConnectOutcome::Connected {
+                session_id: info.session_id,
+                device_id: info.device_id,
+                adb_addr: info.adb_addr,
+            },
+            Err(_) => ConnectOutcome::Failed { code: None },
+        },
+        Err(SetuError::BadCode) => ConnectOutcome::BadCode,
+        Err(SetuError::Unavailable) => ConnectOutcome::Unavailable,
+        Err(SetuError::Cancelled) => ConnectOutcome::Cancelled,
+        Err(error) => ConnectOutcome::Failed { code: error.code() },
+    }
+}
+
+pub fn cancel_pending(pending: &PendingConnect) -> bool {
+    let sender = pending
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    match sender {
+        Some(sender) => sender.send(()).is_ok(),
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -64,7 +133,13 @@ mod tests {
     #[test]
     fn pairing_code_accepts_only_four_dash_six() {
         assert!(PairingCode::parse("0012-345678").is_some());
-        for bad in ["0012345678", "00123-45678", "0012-34567a", "", "00012-345678"] {
+        for bad in [
+            "0012345678",
+            "00123-45678",
+            "0012-34567a",
+            "",
+            "00012-345678",
+        ] {
             assert!(PairingCode::parse(bad).is_none(), "accepted {bad:?}");
         }
     }

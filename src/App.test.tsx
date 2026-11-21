@@ -25,8 +25,8 @@ const hubPort: SessionHubPort = {
 };
 
 const pairPort: PairPort = {
-  connect: vi.fn(async (): Promise<ConnectOutcome> => ({ outcome: "malformed" })),
-  cancel: vi.fn(async () => false),
+  connect: vi.fn((): Promise<ConnectOutcome> => Promise.resolve({ outcome: "malformed" })),
+  cancel: vi.fn(() => Promise.resolve(false)),
 };
 
 describe("App", () => {

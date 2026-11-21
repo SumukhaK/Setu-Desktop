@@ -1,62 +1,80 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PairDialog } from "./PairDialog";
 import type { ConnectOutcome, PairPort } from "./pairPort";
 
-function fakePort(outcome: ConnectOutcome): PairPort & { connect: ReturnType<typeof vi.fn> } {
-  return {
-    connect: vi.fn(async () => outcome),
-    cancel: vi.fn(async () => true),
-  };
+function fakePort(outcome: ConnectOutcome) {
+  const connect = vi.fn(() => Promise.resolve(outcome));
+  const cancel = vi.fn(() => Promise.resolve(true));
+  return { port: { connect, cancel } satisfies PairPort, connect, cancel };
 }
 
 function submitCode(port: PairPort) {
-  render(<PairDialog port={port} onClose={() => undefined} />);
-  const input = screen.getByLabelText("Pairing code") as HTMLInputElement;
+  const view = render(<PairDialog port={port} onClose={() => undefined} />);
+  const input = screen.getByLabelText<HTMLInputElement>("Pairing code");
   fireEvent.change(input, { target: { value: "0012345678" } });
-  return input;
+  return { input, unmount: view.unmount };
 }
 
 describe("PairDialog", () => {
-  it("P02 formats the code as typed and submits the formatted value", async () => {
-    const port = fakePort({ outcome: "connected", session_id: "s1", device_id: "p", adb_addr: "a" });
-    const input = submitCode(port);
+  it("P02 formats the code as typed and submits the formatted value", () => {
+    const { port, connect } = fakePort({
+      outcome: "connected",
+      session_id: "s1",
+      device_id: "p",
+      adb_addr: "a",
+    });
+    const { input } = submitCode(port);
     expect(input.value).toBe("0012-345678");
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect(port.connect).toHaveBeenCalledTimes(1);
-    expect(port.connect).toHaveBeenCalledWith("0012-345678");
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledWith("0012-345678");
   });
 
   it("keeps Connect disabled for letters and partial codes", () => {
-    const port = fakePort({ outcome: "connected", session_id: "s1", device_id: "p", adb_addr: "a" });
+    const { port } = fakePort({
+      outcome: "connected",
+      session_id: "s1",
+      device_id: "p",
+      adb_addr: "a",
+    });
     render(<PairDialog port={port} onClose={() => undefined} />);
-    const input = screen.getByLabelText("Pairing code");
+    const input = screen.getByLabelText<HTMLInputElement>("Pairing code");
     fireEvent.change(input, { target: { value: "0012-34567a" } });
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
     expect(screen.getByText("Use only the 10 digits shown on the phone.")).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
     fireEvent.change(input, { target: { value: "0012-3456" } });
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
   });
 
   it("P19 Cancel signals the pending connect and closes cleanly", async () => {
     let resolveConnect: (outcome: ConnectOutcome) => void = () => undefined;
-    const port: PairPort = {
-      connect: vi.fn(() => new Promise<ConnectOutcome>((resolve) => { resolveConnect = resolve; })),
-      cancel: vi.fn(async () => {
-        resolveConnect({ outcome: "cancelled" });
-        return true;
-      }),
-    };
+    const connect = vi.fn(
+      () =>
+        new Promise<ConnectOutcome>((resolve) => {
+          resolveConnect = resolve;
+        }),
+    );
+    const cancel = vi.fn(() => {
+      resolveConnect({ outcome: "cancelled" });
+      return Promise.resolve(true);
+    });
+    const port: PairPort = { connect, cancel };
     const onClose = vi.fn();
     render(<PairDialog port={port} onClose={onClose} />);
-    fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "0012-345678" } });
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Pairing code"), {
+      target: { value: "0012-345678" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(screen.getByText("Connecting…")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(await screen.queryByRole("dialog")).toBeNull();
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(await screen.queryByRole("alert")).toBeNull();
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows exact error copy and keeps the typed code", async () => {
@@ -76,19 +94,17 @@ describe("PairDialog", () => {
       [{ outcome: "failed", code: null }, "Couldn't connect. Try again."],
     ];
     for (const [outcome, copy] of cases) {
-      const port = fakePort(outcome);
-      const input = submitCode(port);
+      const { port } = fakePort(outcome);
+      const { unmount } = submitCode(port);
       fireEvent.click(screen.getByRole("button", { name: "Connect" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(copy);
-      expect((screen.getByLabelText("Pairing code") as HTMLInputElement).value).toBe(
-        "0012-345678",
-      );
-      expect(input).toBeTruthy();
+      expect(screen.getByLabelText<HTMLInputElement>("Pairing code").value).toBe("0012-345678");
+      unmount();
     }
   });
 
   it("never shows a timer or expiry text and stores nothing", async () => {
-    const port = fakePort({ outcome: "bad_code" });
+    const { port } = fakePort({ outcome: "bad_code" });
     submitCode(port);
     expect(document.body.textContent).not.toMatch(/\d+\s*(s|sec|min)|expire/i);
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));

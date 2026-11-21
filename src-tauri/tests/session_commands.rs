@@ -38,9 +38,12 @@ async fn p02_a_valid_code_sends_exactly_the_connect_params_and_yields_connected(
     fake.reply_with("session.connect", session_info());
     let pending = PendingConnect::default();
 
-    let outcome = timeout(TEST_TIMEOUT, connect_with_code(Some(client), CODE, &pending))
-        .await
-        .expect("connect finishes");
+    let outcome = timeout(
+        TEST_TIMEOUT,
+        connect_with_code(Some(client), CODE, &pending),
+    )
+    .await
+    .expect("connect finishes");
     assert_eq!(
         outcome,
         ConnectOutcome::Connected {
@@ -79,10 +82,7 @@ async fn typed_errors_map_to_outcomes() {
     let cases = [
         (-32013, ConnectOutcome::BadCode),
         (-32011, ConnectOutcome::Unavailable),
-        (
-            -32020,
-            ConnectOutcome::Failed { code: Some(-32020) },
-        ),
+        (-32020, ConnectOutcome::Failed { code: Some(-32020) }),
     ];
     for (code, expected) in cases {
         let (fake, client) = connect_fake().await;
@@ -91,9 +91,12 @@ async fn typed_errors_map_to_outcomes() {
             json!({ "code": code, "message": "denied" }),
         );
         let pending = PendingConnect::default();
-        let outcome = timeout(TEST_TIMEOUT, connect_with_code(Some(client), CODE, &pending))
-            .await
-            .expect("connect finishes");
+        let outcome = timeout(
+            TEST_TIMEOUT,
+            connect_with_code(Some(client), CODE, &pending),
+        )
+        .await
+        .expect("connect finishes");
         assert_eq!(outcome, expected, "code {code}");
     }
 }
@@ -115,9 +118,10 @@ async fn p19_cancel_signals_the_exact_pending_request() {
     let pending = Arc::new(PendingConnect::default());
     let connect_client = client.clone();
     let task_pending = Arc::clone(&pending);
-    let task = tokio::spawn(async move {
-        connect_with_code(Some(connect_client), CODE, &task_pending).await
-    });
+    let task =
+        tokio::spawn(
+            async move { connect_with_code(Some(connect_client), CODE, &task_pending).await },
+        );
     fake.wait_for_requests(1).await;
     let connect_id = fake.received()[0]["id"].clone();
 
@@ -139,19 +143,27 @@ async fn p19_cancel_signals_the_exact_pending_request() {
 #[tokio::test]
 async fn a_second_concurrent_connect_is_rejected_and_the_slot_is_cleared() {
     let (fake, client) = connect_fake().await;
-    fake.reply_delayed("session.connect", session_info(), Duration::from_millis(300));
+    fake.reply_delayed(
+        "session.connect",
+        session_info(),
+        Duration::from_millis(300),
+    );
     let pending = Arc::new(PendingConnect::default());
 
     let first_client = client.clone();
     let first_pending = Arc::clone(&pending);
-    let first = tokio::spawn(async move {
-        connect_with_code(Some(first_client), CODE, &first_pending).await
-    });
+    let first =
+        tokio::spawn(
+            async move { connect_with_code(Some(first_client), CODE, &first_pending).await },
+        );
     fake.wait_for_requests(1).await;
 
-    let second = timeout(TEST_TIMEOUT, connect_with_code(Some(client.clone()), CODE, &pending))
-        .await
-        .expect("second connect finishes");
+    let second = timeout(
+        TEST_TIMEOUT,
+        connect_with_code(Some(client.clone()), CODE, &pending),
+    )
+    .await
+    .expect("second connect finishes");
     assert_eq!(second, ConnectOutcome::AlreadyPending);
 
     let first_outcome = timeout(TEST_TIMEOUT, first)
@@ -168,10 +180,37 @@ async fn a_second_concurrent_connect_is_rejected_and_the_slot_is_cleared() {
     );
 
     fake.reply_with("session.connect", session_info());
-    let third = timeout(TEST_TIMEOUT, connect_with_code(Some(client), CODE, &pending))
-        .await
-        .expect("third connect finishes");
+    let third = timeout(
+        TEST_TIMEOUT,
+        connect_with_code(Some(client), CODE, &pending),
+    )
+    .await
+    .expect("third connect finishes");
     assert!(matches!(third, ConnectOutcome::Connected { .. }));
+}
+
+#[tokio::test]
+async fn a_lost_connection_fails_without_a_code_and_unrelated_events_are_ignored() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_delayed("session.connect", session_info(), Duration::from_secs(60));
+    let pending = PendingConnect::default();
+    let connect_client = client.clone();
+    let task =
+        tokio::spawn(async move { connect_with_code(Some(connect_client), CODE, &pending).await });
+    fake.wait_for_requests(1).await;
+    fake.send_raw(
+        b"{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{\"type\":\"future_thing\",\"session\":\"s1\",\"fields\":{}}}\n",
+    )
+    .await;
+    fake.notify("event", json!({ "type": "session_up", "session": "s1" }))
+        .await;
+    fake.close().await;
+
+    let outcome = timeout(TEST_TIMEOUT, task)
+        .await
+        .expect("connect finishes")
+        .expect("join");
+    assert_eq!(outcome, ConnectOutcome::Failed { code: None });
 }
 
 #[tokio::test]

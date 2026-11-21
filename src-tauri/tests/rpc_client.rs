@@ -362,7 +362,15 @@ async fn cancel_during_busy_backoff_skips_the_retry() {
         tokio::spawn(async move { client.call_cancellable("m", None, cancel_rx).await })
     };
     fake.wait_for_requests(1).await;
-    cancel_tx.send(()).expect("cancel receiver is alive");
+    // Let the immediate busy reply reach the client so the cancel lands in
+    // the back-off window, not while the first request is still in flight.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let sent = cancel_tx.send(());
+    assert!(
+        sent.is_ok(),
+        "cancel receiver gone; requests={:?}",
+        fake.received()
+    );
 
     let result = timeout(TEST_TIMEOUT, pending)
         .await
@@ -370,13 +378,11 @@ async fn cancel_during_busy_backoff_skips_the_retry() {
         .expect("join");
     assert!(matches!(result, Err(SetuError::Cancelled)));
     let received = fake.received();
-    assert_eq!(received.len(), 1, "no retry was sent");
+    assert_eq!(received.len(), 1, "no retry was sent: {received:?}");
     assert_eq!(received[0]["method"], "m");
-    assert!(
-        received
-            .iter()
-            .all(|request| request["method"] != "session.cancel")
-    );
+    assert!(received
+        .iter()
+        .all(|request| request["method"] != "session.cancel"));
 }
 
 /// A cancel signal after the reply has arrived changes nothing.
@@ -389,10 +395,10 @@ async fn cancel_after_the_reply_arrives_does_nothing() {
         .await
         .expect("call finishes");
     assert_eq!(result.unwrap(), json!({ "ok": true }));
-    cancel_tx.send(()).expect("cancel receiver is alive");
-    assert!(
-        fake.received()
-            .iter()
-            .all(|request| request["method"] != "session.cancel")
-    );
+    // The receiver is gone with the finished call; signalling it is a no-op.
+    let _ = cancel_tx.send(());
+    assert!(fake
+        .received()
+        .iter()
+        .all(|request| request["method"] != "session.cancel"));
 }

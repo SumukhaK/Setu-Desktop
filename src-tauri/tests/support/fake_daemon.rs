@@ -93,14 +93,7 @@ impl FakeDaemon {
 
     /// Reply to the next request with this method with a JSON-RPC error object.
     pub fn reply_with_error(&self, method: &str, error: Value) {
-        self.push(
-            method,
-            Scripted {
-                result: None,
-                error: Some(error),
-                delay: None,
-            },
-        );
+        self.reply_error_delayed(method, error, Duration::ZERO);
     }
 
     /// Reply to the next request with this method using a JSON-RPC error

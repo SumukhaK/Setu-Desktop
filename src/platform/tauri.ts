@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import type { DaemonPort, DaemonStatus } from "../daemon/status";
-import type { PairPort } from "../features/pair/pairPort";
+import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
 import type { HubMessage } from "../state/sessionStore";
 import type { SessionHubPort } from "../state/useSessions";
 
@@ -18,11 +18,11 @@ export const tauriDaemonPort: DaemonPort = {
 };
 
 export const tauriPairPort: PairPort = {
-  connect() {
-    return Promise.resolve({ outcome: "malformed" });
+  connect(code) {
+    return invoke<ConnectOutcome>("session_connect_code", { code });
   },
   cancel() {
-    return Promise.resolve(false);
+    return invoke<boolean>("session_cancel_connect");
   },
 };
 
