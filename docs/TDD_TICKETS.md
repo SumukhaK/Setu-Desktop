@@ -13,7 +13,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-01 · JSON-RPC client core · Done in [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3)
 - [x] DT-02 · Daemon supervisor and workspaces · Done in [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6)
 - [x] DT-03a · App shell and UI scaffold · Done in [#11](https://github.com/SumukhaK/Setu-Desktop/pull/11)
-- [ ] DT-03b · Event hub and session store
+- [x] DT-03b · Event hub and session store · Done in [#13](https://github.com/SumukhaK/Setu-Desktop/pull/13)
 - [ ] DT-04 · Solo pairing form with cancel
 - [ ] DT-05 · Local ADB adapter
 - [ ] DT-06 · Session card and status strip
