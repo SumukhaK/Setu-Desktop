@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::errors::{from_error_object, SetuError};
 use super::framing::{encode, LineDecoder};
@@ -95,6 +95,61 @@ impl RpcClient {
         self.request_once(method, params).await
     }
 
+    /// Like [`Self::call`], but a cancel signal sends `session.cancel` with
+    /// this request's own id and still waits for the daemon's reply (AD-12).
+    pub async fn call_cancellable(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        cancel: oneshot::Receiver<()>,
+    ) -> Result<Value, SetuError> {
+        let cancel = CancelSignal::new(cancel);
+        let first = self
+            .request_once_cancellable(method, params.clone(), &cancel)
+            .await;
+        match first {
+            Err(SetuError::Busy) => {}
+            other => return other,
+        }
+        let cancelled = tokio::select! {
+            _ = tokio::time::sleep(BUSY_RETRY_DELAY) => false,
+            fired = cancel.wait() => {
+                if fired {
+                    true
+                } else {
+                    // A dropped sender means "never cancel": finish the back-off.
+                    tokio::time::sleep(BUSY_RETRY_DELAY).await;
+                    false
+                }
+            }
+        };
+        if cancelled {
+            return Err(SetuError::Cancelled);
+        }
+        self.request_once_cancellable(method, params, &cancel).await
+    }
+
+    async fn request_once_cancellable(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        cancel: &CancelSignal,
+    ) -> Result<Value, SetuError> {
+        let (id, mut reply_rx) = self.send_request(method, params)?;
+        tokio::select! {
+            reply = Self::await_reply(&mut reply_rx) => reply,
+            fired = cancel.wait() => {
+                if fired {
+                    let _ = self
+                        .call("session.cancel", Some(json!({ "request_id": id })))
+                        .await;
+                }
+                // The pending reply is never dropped: keep waiting for it.
+                Self::await_reply(&mut reply_rx).await
+            }
+        }
+    }
+
     /// Typed `auth {token}` call; expects `{ok: true}`.
     pub async fn auth(&self, token: &str) -> Result<(), SetuError> {
         let result = self.call("auth", Some(json!({ "token": token }))).await?;
@@ -111,6 +166,16 @@ impl RpcClient {
     }
 
     async fn request_once(&self, method: &str, params: Option<Value>) -> Result<Value, SetuError> {
+        let (_, mut reply_rx) = self.send_request(method, params)?;
+        Self::await_reply(&mut reply_rx).await
+    }
+
+    /// Allocate an id, register the pending reply and write the request.
+    fn send_request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<(u64, oneshot::Receiver<Result<Value, SetuError>>), SetuError> {
         let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
         let (reply_tx, reply_rx) = oneshot::channel();
         {
@@ -156,6 +221,14 @@ impl RpcClient {
                 return Err(SetuError::Disconnected);
             }
         }
+        Ok((id, reply_rx))
+    }
+
+    /// Wait for a pending reply without owning the receiver, so a select can
+    /// observe a cancel signal and still keep waiting on the same reply.
+    async fn await_reply(
+        reply_rx: &mut oneshot::Receiver<Result<Value, SetuError>>,
+    ) -> Result<Value, SetuError> {
         match reply_rx.await {
             Ok(reply) => reply,
             // The pending entry was dropped by close(): the connection is closed.
@@ -172,6 +245,41 @@ impl Shared {
         let mut pending = self.pending.lock().expect("pending calls");
         for (_, reply_tx) in pending.drain() {
             let _ = reply_tx.send(Err(SetuError::Disconnected));
+        }
+    }
+}
+
+/// A cancel signal that can be waited on more than once (call, then busy
+/// back-off). A dropped sender means "never cancel" (AD-12).
+struct CancelSignal {
+    tx: watch::Sender<bool>,
+    _keep_open: watch::Receiver<bool>,
+}
+
+impl CancelSignal {
+    fn new(receiver: oneshot::Receiver<()>) -> Self {
+        let (tx, keep_open) = watch::channel(false);
+        let forward = tx.clone();
+        tokio::spawn(async move {
+            if receiver.await.is_ok() {
+                let _ = forward.send(true);
+            }
+        });
+        Self {
+            tx,
+            _keep_open: keep_open,
+        }
+    }
+
+    async fn wait(&self) -> bool {
+        let mut receiver = self.tx.subscribe();
+        loop {
+            if *receiver.borrow() {
+                return true;
+            }
+            if receiver.changed().await.is_err() {
+                return false;
+            }
         }
     }
 }
