@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use setu_desktop::rpc::{Notification, RpcClient, SetuError, VersionInfo, MAX_LINE_BYTES};
 use support::fake_daemon::FakeDaemon;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tokio::time::timeout;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,6 +26,10 @@ async fn connect_fake() -> (FakeDaemon, RpcClient, UnboundedReceiver<Notificatio
 
 fn busy_error() -> Value {
     json!({ "code": -32027, "message": "too many requests", "data": { "kind": "busy" } })
+}
+
+fn cancelled_error() -> Value {
+    json!({ "code": -32022, "message": "cancelled", "data": { "kind": "cancelled" } })
 }
 
 /// Concurrent calls resolve to their own results when the daemon answers
@@ -287,4 +291,108 @@ async fn the_connection_stays_open_while_a_clone_is_alive() {
         .expect("call finishes")
         .unwrap();
     assert_eq!(result, json!({ "ok": true }));
+}
+
+/// AD-12: cancelling mid-call sends `session.cancel` with this call's own
+/// numeric id and still waits for the daemon's `-32022` reply.
+#[tokio::test]
+async fn cancel_mid_call_sends_cancel_with_the_request_id_and_returns_cancelled() {
+    let (fake, client, _notifications) = connect_fake().await;
+    fake.reply_error_delayed(
+        "session.connect",
+        cancelled_error(),
+        Duration::from_millis(300),
+    );
+    fake.reply_with("session.cancel", json!({ "cancelled": 1 }));
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .call_cancellable(
+                    "session.connect",
+                    Some(json!({ "pairing_code": "0012-345678" })),
+                    cancel_rx,
+                )
+                .await
+        })
+    };
+    fake.wait_for_requests(1).await;
+    let connect_id = fake.received()[0]["id"].clone();
+    cancel_tx.send(()).expect("cancel receiver is alive");
+
+    let result = timeout(TEST_TIMEOUT, pending)
+        .await
+        .expect("call finishes")
+        .expect("join");
+    assert!(matches!(result, Err(SetuError::Cancelled)));
+    let received = fake.received();
+    let cancel = received
+        .iter()
+        .find(|request| request["method"] == "session.cancel")
+        .expect("session.cancel was sent");
+    assert_eq!(cancel["params"]["request_id"], connect_id);
+}
+
+/// A dropped cancel sender means "never cancel".
+#[tokio::test]
+async fn a_dropped_cancel_sender_behaves_like_call() {
+    let (fake, client, _notifications) = connect_fake().await;
+    fake.reply_with("m", json!({ "ok": true }));
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    drop(cancel_tx);
+
+    let result = timeout(TEST_TIMEOUT, client.call_cancellable("m", None, cancel_rx))
+        .await
+        .expect("call finishes");
+    assert_eq!(result.unwrap(), json!({ "ok": true }));
+    assert_eq!(fake.received().len(), 1);
+    assert_eq!(fake.received()[0]["method"], "m");
+}
+
+/// Cancelling during the busy back-off returns Cancelled without sending the
+/// retry.
+#[tokio::test]
+async fn cancel_during_busy_backoff_skips_the_retry() {
+    let (fake, client, _notifications) = connect_fake().await;
+    fake.reply_with_error("m", busy_error());
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let pending = {
+        let client = client.clone();
+        tokio::spawn(async move { client.call_cancellable("m", None, cancel_rx).await })
+    };
+    fake.wait_for_requests(1).await;
+    cancel_tx.send(()).expect("cancel receiver is alive");
+
+    let result = timeout(TEST_TIMEOUT, pending)
+        .await
+        .expect("call finishes")
+        .expect("join");
+    assert!(matches!(result, Err(SetuError::Cancelled)));
+    let received = fake.received();
+    assert_eq!(received.len(), 1, "no retry was sent");
+    assert_eq!(received[0]["method"], "m");
+    assert!(
+        received
+            .iter()
+            .all(|request| request["method"] != "session.cancel")
+    );
+}
+
+/// A cancel signal after the reply has arrived changes nothing.
+#[tokio::test]
+async fn cancel_after_the_reply_arrives_does_nothing() {
+    let (fake, client, _notifications) = connect_fake().await;
+    fake.reply_with("m", json!({ "ok": true }));
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let result = timeout(TEST_TIMEOUT, client.call_cancellable("m", None, cancel_rx))
+        .await
+        .expect("call finishes");
+    assert_eq!(result.unwrap(), json!({ "ok": true }));
+    cancel_tx.send(()).expect("cancel receiver is alive");
+    assert!(
+        fake.received()
+            .iter()
+            .all(|request| request["method"] != "session.cancel")
+    );
 }

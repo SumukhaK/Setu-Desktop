@@ -103,6 +103,19 @@ impl FakeDaemon {
         );
     }
 
+    /// Reply to the next request with this method using a JSON-RPC error
+    /// object, after a delay.
+    pub fn reply_error_delayed(&self, method: &str, error: Value, delay: Duration) {
+        self.push(
+            method,
+            Scripted {
+                result: None,
+                error: Some(error),
+                delay: Some(delay),
+            },
+        );
+    }
+
     /// Reply to the next request with this method after a delay.
     pub fn reply_delayed(&self, method: &str, result: Value, delay: Duration) {
         self.push(

@@ -95,6 +95,15 @@ impl RpcClient {
         self.request_once(method, params).await
     }
 
+    pub async fn call_cancellable(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        _cancel: oneshot::Receiver<()>,
+    ) -> Result<Value, SetuError> {
+        self.call(method, params).await
+    }
+
     /// Typed `auth {token}` call; expects `{ok: true}`.
     pub async fn auth(&self, token: &str) -> Result<(), SetuError> {
         let result = self.call("auth", Some(json!({ "token": token }))).await?;
