@@ -1,219 +1,198 @@
-# Builder prompt · DT-03b · Event hub and session store
+# Builder prompt · DT-04 · Solo pairing form with cancel
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
-1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-9; AD-1 was updated for the DT-03a shell). This ticket adds AD-10 and AD-11 (§3); the reviewer writes them into memory after merge.
-2. `docs/TDD_TICKETS.md` §4 (stack) and §5 "DT-03b".
-3. `docs/JOURNEYS.md` rows P14 (the "events keyed by tunnel id; stale tunnel or stopped session can't overwrite" part only), P17 (restore), P18 ("re-lists sessions") and P21.
-4. Setu-SDK v1.1.0 `API_SPEC.md` §1.5 (event types, path events), §2.1 (`events.subscribe`, `session.list`, `SessionInfo`) and §2.2 (`event`, `events.dropped`): https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
-5. Existing code you'll use: `src-tauri/src/rpc/` (`RpcClient`, `Notification`, `SetuError`), `src-tauri/src/daemon/` (`Supervisor`, `DaemonState`, `Workspace`), `src-tauri/src/app/`, `src/daemon/`, `src/platform/tauri.ts`, `tests/support/fake_daemon.rs`.
+1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-11). This ticket adds AD-12 (§3). The reviewer writes it into memory after merge.
+2. `docs/TDD_TICKETS.md` §4 (stack) and §5 "DT-04".
+3. `docs/JOURNEYS.md` rows P02, P03 and P19.
+4. `docs/SCREENS.md` row D02 (Pair new device sheet).
+5. Setu-SDK v1.1.0 `API_SPEC.md` §2.1 (`session.connect`, `session.cancel`), §2.3 (errors) and §2.4 (the cancel example): https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
+6. Existing code you'll use: `src-tauri/src/rpc/client.rs` (`RpcClient`), `src-tauri/src/events/model.rs` (`SessionInfo`), `src-tauri/src/app/mod.rs` (the `shell` module), `src/state/useSessions.ts`, `src/platform/tauri.ts`.
 
 ## 1. Goal
 
-A Rust event hub opens its own authenticated connection to the workspace daemon, calls `events.subscribe`, takes a `session.list` snapshot and pushes one ordered stream of typed, secret-free messages to the UI. A TypeScript reducer turns that stream into the session store that DT-04 to DT-07 render. On `events.dropped`, a daemon restart (new generation) or a UI request, the hub resyncs: events that arrive while `session.list` is in flight are held and released only after the snapshot (P21). Events for a session that has ended, or for a tunnel that is already lost, never change state (P14 part). There's no session card, no rejoin banner (DT-07), no pairing (DT-04), no corporate presence (DT-15), and no change to the prototype.
+From the main window, the user opens **Pair new device** and types or pastes the ten-digit code shown on the phone. The code is shown as `NNNN-NNNNNN`, leading zeroes kept. They submit it, and Rust calls `session.connect {pairing_code, timeout_ms: 60000}` on the supervisor's connection.
+- **Success:** the dialog closes. The live session then appears through the DT-03b store ("1 live session").
+- **Wrong code (`-32013`):** one combined message.
+- **Unreachable (`-32011`):** an unavailable message.
+- **Cancel while pending:** sends `session.cancel {request_id}` for that exact JSON-RPC request. The connect resolves with `-32022`, and the dialog closes with no error (P19).
+
+The code is never logged, persisted or put in a type that derives `Debug`. There's no device list (DT-08), no `device_id` reconnect UI, no `pair_adb` (DT-10), no styling, and no change to the prototype.
 
 ## 2. Files (create or change only these)
 
 ```
-src-tauri/src/lib.rs                    + pub mod events;
-src-tauri/src/daemon/supervisor.rs      DaemonState::Ready gains `listen: SocketAddr`; + pub async fn connect_authenticated (§3)
-src-tauri/src/daemon/mod.rs             re-export connect_authenticated
-src-tauri/tests/daemon_supervisor.rs    only: add `..` / `listen` to the Ready patterns so it compiles; assert Ready.listen == record listen in the existing spawn test
-src-tauri/src/events/mod.rs             re-exports
-src-tauri/src/events/model.rs           SessionInfo, HubEvent, HubMessage, parse_notification() (pure)
-src-tauri/src/events/gate.rs            ResyncGate state machine (pure, no IO)
-src-tauri/src/events/hub.rs             EventHub: watch supervisor state, connect, subscribe, list, forward
-src-tauri/src/app/mod.rs                inside the existing #[cfg(not(test))] mod shell: start the hub, emit "session-hub", command session_resync
-src-tauri/tests/event_hub.rs            integration tests with FakeDaemon
-src/state/clock.ts                      Clock interface + systemClock (performance.now)
-src/state/sessionStore.ts               types, initialState, reduce(state, msg, now)
-src/state/useSessions.ts                SessionHubPort, useSessions(port, clock)
-src/state/clock.test.ts
-src/state/sessionStore.test.ts
-src/state/useSessions.test.tsx
-src/platform/tauri.ts                   + tauriSessionHubPort (invoke "session_resync", listen "session-hub")
-src/App.tsx, src/main.tsx               pass the port; one plain line "No live sessions" / "N live session(s)" under the strip
+src-tauri/src/rpc/client.rs              + call_cancellable (§3); split request_once into send + await, no behaviour change for call()
+src-tauri/tests/rpc_client.rs            + cancellable-call tests
+src-tauri/tests/support/fake_daemon.rs   + reply_error_delayed(method, error, delay)
+src-tauri/src/lib.rs                     + pub mod commands;
+src-tauri/src/commands/mod.rs            re-exports
+src-tauri/src/commands/session.rs        PairingCode, ConnectOutcome, PendingConnect, connect_with_code, cancel_pending (no tauri import)
+src-tauri/tests/session_commands.rs      integration tests with FakeDaemon
+src-tauri/src/app/mod.rs                 inside `mod shell`: keep the Supervisor handle usable, two tauri commands (§3)
+src/features/pair/codeFormat.ts          parseCodeInput()
+src/features/pair/codeFormat.test.ts
+src/features/pair/pairPort.ts            PairPort, ConnectOutcome (mirrors Rust), outcomeMessage()
+src/features/pair/PairDialog.tsx
+src/features/pair/PairDialog.test.tsx
+src/platform/tauri.ts                    + tauriPairPort (still the only @tauri-apps/api import)
+src/App.tsx, src/main.tsx                "Pair new device" button toggles <PairDialog />; pass pairPort
+src/App.test.tsx                         App opens and closes the dialog
 ```
 
-Don't change `src-tauri/src/rpc/`, `tests/support/*`, `docs/`, `README.md` or the prototype (`index.html`, `prototype.js`, `styles.css`). Add no crate and no npm package.
+Don't change `src-tauri/src/daemon/`, `src-tauri/src/events/`, `docs/`, `README.md` or the prototype (`index.html`, `prototype.js`, `styles.css`). Add no crate and no npm package.
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**AD-10: dedicated events connection.** The supervisor's own connection stays the liveness probe and never subscribes. The hub opens a second connection to `Ready.listen` with:
+**AD-12: cancel by request id inside the client.** The JSON-RPC id stays private to `RpcClient`. Callers get cancellation as a signal, not an id.
 
 ```rust
-/// Connects to a loopback daemon and authenticates with <state_dir>/daemon.token.
-/// Non-loopback addr → Err(SetuError::Unauthorized) without connecting. Missing/empty token → Err(Unauthorized).
-pub async fn connect_authenticated(listen: SocketAddr, state_dir: &Path)
-    -> Result<(RpcClient, mpsc::UnboundedReceiver<Notification>), SetuError>;
+/// Like `call`, including the one `-32027` retry. If `cancel` fires while a
+/// request is in flight, sends `session.cancel {"request_id": <that id>}` on this
+/// same connection (ignore its result), then keeps awaiting the original reply,
+/// which the daemon answers with -32022 → Err(SetuError::Cancelled).
+/// If `cancel` fires during the busy back-off, return Err(Cancelled) without
+/// sending the retry. A dropped sender (RecvError) means "never cancel".
+/// Cancel acts at most once.
+pub async fn call_cancellable(&self, method: &str, params: Option<Value>,
+    cancel: oneshot::Receiver<()>) -> Result<Value, SetuError>;
 ```
 
-Reuse the existing `read_token`; the token never leaves `daemon/`.
+Use the numeric id (`"request_id": 7`). The daemon compacts the raw JSON id, so a number matches. Wait on the reply and the cancel signal with `tokio::select!`. Never drop the pending reply before it resolves.
 
-**AD-11: typed allowlist across the bridge.** Raw daemon events never reach the UI. `parse_notification(&Notification) -> Parsed` with `enum Parsed { Event(HubEvent), Dropped { count: u64 }, Ignored }`. Only these event types are forwarded. Everything else (`audit`, `token_updated`, `adb_pair`, `paired`, `pairing_code`, device-side types, unknown future types) is `Ignored`, as is any allowlisted event with a missing or wrongly typed required field. Error strings are never forwarded.
+**`commands/session.rs` (pure Rust, unit- and integration-testable without Tauri).**
 
 ```rust
+/// Exactly ^[0-9]{4}-[0-9]{6}$. No Debug, Display, Serialize or Clone. Dropped after the call.
+pub struct PairingCode(String);
+impl PairingCode { pub fn parse(raw: &str) -> Option<PairingCode>; }
+
 #[derive(Clone, Serialize, PartialEq, Debug)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum HubEvent {
-    Listening   { session: String, addr: String, device_id: String },
-    SessionUp   { session: String, addr: String, device_id: String },
-    Retrying    { session: String, attempt: u32, delay_ms: u64 },
-    SessionDown { session: String, abnormal: bool },              // abnormal = fields.error present
-    PathDown    { session: String, tunnel_id: String, reason: String, transport: String },
-    PathUp      { session: String, tunnel_id: String, transport: String, outage_ms: u64 },
-    PathLost    { session: String, tunnel_id: String, reason: String, outage_ms: u64 },
-    SessionExpired { session: String, device_id: String, reason: String },
-    PeerClosed  { session: String, device_id: String, peer_reason: String },
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ConnectOutcome {
+    Connected { session_id: String, device_id: String, adb_addr: String },
+    Malformed,          // PairingCode::parse failed; the daemon is never called
+    NotReady,           // no Ready client
+    AlreadyPending,     // a connect is already in flight
+    BadCode,            // -32013
+    Unavailable,        // -32011
+    Cancelled,          // -32022
+    Failed { code: Option<i64> },   // anything else, incl. UnexpectedResult / Disconnected (code None)
 }
-// `session` = Event.session ("s1"…); `tunnel_id` = fields.session_id (16 hex). An event with an empty `session` is Ignored.
 
-#[derive(Clone, Serialize, PartialEq, Debug)]
-pub struct SessionInfo { pub session_id: String, pub adb_addr: String, pub device_id: String, pub started: String }
+#[derive(Default)]
+pub struct PendingConnect(std::sync::Mutex<Option<oneshot::Sender<()>>>);
 
-#[derive(Clone, Serialize, PartialEq, Debug)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum HubMessage {
-    Snapshot    { epoch: u64, generation: u64, sessions: Vec<SessionInfo> },
-    Event       { epoch: u64, generation: u64, event: HubEvent },
-    Unavailable { generation: u64 },
-}
+pub async fn connect_with_code(client: Option<RpcClient>, raw: &str, pending: &PendingConnect) -> ConnectOutcome;
+pub fn cancel_pending(pending: &PendingConnect) -> bool;   // true if a pending connect was signalled
 ```
 
-**`ResyncGate` (`gate.rs`, pure).** It owns `epoch` (starts at 0 and only increases) and a state of `Live` or `Resyncing { buffer: Vec<HubEvent>, again: bool }`.
-- `begin(generation) -> Action::ListSessions`: epoch += 1, clear the buffer, go to `Resyncing`. Called for each new connection.
-- `request_resync() -> Option<Action>`: used for `events.dropped` and for the UI's `session_resync`.
-  - From `Live`: epoch += 1, go to `Resyncing`, return `Some(ListSessions)`.
-  - From `Resyncing`: set `again = true` and clear the buffer (those events are older than the gap), and return `None`.
-- `on_event(e) -> Vec<HubMessage>`: in `Live`, emit `Event{epoch, generation, e}`. In `Resyncing`, buffer it.
-- `on_sessions(list) -> (Vec<HubMessage>, Option<Action>)`:
-  - If `again`: reset it, clear the buffer, emit nothing and return `Some(ListSessions)`.
-  - Otherwise emit `Snapshot{epoch,…}`, then every buffered event in arrival order with the same epoch, then go `Live`.
-- Corporate `devices.presence` resync is DT-15. Leave a doc comment on `on_sessions` naming it, not a TODO.
+`connect_with_code` works in this order:
+1. Parse the code, else return `Malformed`.
+2. Take the client, else return `NotReady`.
+3. Store a cancel sender in the slot. If the slot is occupied, return `AlreadyPending`.
+4. Call `call_cancellable("session.connect", {"pairing_code": <code>, "timeout_ms": 60000}, rx)`.
+5. **Always** clear the slot, on every path (use a small guard).
+6. Map the result:
+   - `Ok`: deserialize `events::SessionInfo` into `Connected`. A bad shape is `Failed{code: None}`.
+   - `BadCode`, `Unavailable` and `Cancelled` map one to one.
+   - Anything else maps to `Failed{code: e.code()}`.
 
-**`EventHub` (`hub.rs`).**
+`cancel_pending` takes the sender and sends `()`. It is a no-op returning `false` when nothing is pending. The code and the slot never appear in an error, a log or `ConnectOutcome`.
 
-```rust
-pub fn start(states: watch::Receiver<DaemonState>, state_dir: PathBuf)
-    -> (EventHub, mpsc::UnboundedReceiver<HubMessage>);   // EventHub: Clone
-impl EventHub { pub fn resync(&self); }                   // non-blocking; no-op while not connected
-```
+**`app/mod.rs` (shell).**
+- Keep the `Supervisor` in `AppState` as a usable field, not `_supervisor`. Add `pending: PendingConnect`.
+- `#[tauri::command] async fn session_connect_code(code: String, state) -> ConnectOutcome`. It takes the current client from `supervisor.subscribe().borrow()` when that state is `Ready`, otherwise `None`, then calls `connect_with_code`.
+- `#[tauri::command] fn session_cancel_connect(state) -> bool` calls `cancel_pending`.
+- With no supervisor (NotConfigured), connect returns `NotReady` and cancel returns `false`.
+- Register both commands next to `daemon_status` and `session_resync`. Don't clone the `String` code anywhere else.
 
-- On each `Ready` with a new `generation`:
-  1. `connect_authenticated(listen, &state_dir)`.
-  2. Call `events.subscribe` **before** `session.list`, so no event can fall between them.
-  3. Then `gate.begin` → `session.list` on the hub's own client.
-  4. Parse `{sessions:[SessionInfo]}` strictly. A bad shape counts as a failed list.
-- Run notifications, list results and resync requests through one task, so the gate is never touched concurrently. `session.list` can run concurrently with notifications on the same client. Await it in a spawned future whose result comes back over a channel. Don't block the notification loop.
-- When the connection ends, a call fails or a list fails, emit `Unavailable{generation}`, drop the client and retry `connect_authenticated` after 1 s for as long as that generation is still the current `Ready`.
-- On `Restarting`, `Failed` or `Stopped`, emit `Unavailable` once, drop the connection and wait for the next `Ready`.
-- The hub never calls `session.stop`, `session.connect` or `events.unsubscribe`. Dropping every `EventHub` handle ends the task and closes its connection. It never stops sessions (P17).
-- Wrap every send to the UI channel in `let _ =`. A closed receiver must not panic.
-
-**`app/mod.rs`.** After `Supervisor::start`, call `EventHub::start(supervisor.subscribe(), Workspace::Solo.state_dir(&app_data))`. Spawn one task that `emit("session-hub", &msg)` for each message. Keep the `EventHub` in managed state. Add `#[tauri::command] fn session_resync(state)` that calls `hub.resync()` when a hub exists, and otherwise does nothing (NotConfigured). Register it next to `daemon_status`.
-
-**UI (AD-9 still applies: only `src/platform/tauri.ts` imports `@tauri-apps/api`).**
+**UI (AD-9: features take ports; only `src/platform/tauri.ts` imports Tauri).**
 
 ```ts
-// clock.ts
-export interface Clock { now(): number }            // monotonic ms
-export const systemClock: Clock;                    // performance.now()
-
-// sessionStore.ts: mirror HubMessage/HubEvent/SessionInfo exactly (snake_case fields, "kind"/"type" tags)
-export type TunnelState =
-  | { state: "up"; transport: string }
-  | { state: "down"; since: number; reason: string; transport: string }
-  | { state: "lost"; reason: string };
-export interface LiveSession {
-  sessionId: string; deviceId: string; adbAddr: string | null; started: string | null;
-  status: "listening" | "up" | "retrying";
-  transport: string | null;                          // last path_up transport; null = unknown (DT-06 decides the copy)
-  tunnels: Record<string, TunnelState>;
-}
-export type EndReason = "closed" | "error" | "peer_closed" | "session_expired";
-export interface EndedSession { sessionId: string; deviceId: string | null; reason: EndReason; at: number }
-export interface SessionStoreState {
-  synced: boolean; epoch: number; generation: number | null;
-  live: Record<string, LiveSession>; ended: EndedSession[];   // ended: newest first, at most 20
-}
-export const initialState: SessionStoreState;       // synced false, epoch 0, generation null, empty
-export function reduce(s: SessionStoreState, m: HubMessage, now: number): SessionStoreState;   // pure, never mutates
+// codeFormat.ts
+export interface CodeInput { display: string; code: string | null; problem: "characters" | "length" | null }
+export function parseCodeInput(raw: string): CodeInput;
 ```
 
-Reducer rules:
-- `snapshot`:
-  - Ignore it if `epoch < s.epoch`.
-  - Otherwise `live` becomes exactly the listed sessions, with status "up", transport null and no tunnels. A session that is already live and still listed keeps its transport and tunnels.
-  - Set `synced`, `epoch` and `generation`. Keep `ended`.
-- `event`:
-  - Ignore it unless `synced` and `epoch === s.epoch`.
-  - `listening` / `session_up`: upsert by `session`. This is idempotent: tunnels are kept, and status becomes "listening" or "up".
-  - `retrying`: a live session becomes "retrying". Otherwise ignore it.
-  - `session_down` / `peer_closed` / `session_expired`:
-    - A live session is removed and an `EndedSession` is prepended. Use the reason "error" when `abnormal`, else "closed".
-    - Any terminal event for a session that isn't live is ignored. A `peer_closed` followed by a `session_down` therefore keeps `peer_closed`.
-  - `path_down` / `path_up` / `path_lost`:
-    - Ignore them for a session that isn't live, and for a tunnel whose state is already `lost`.
-    - `path_down`: set `down{since: now}`.
-    - `path_up`: set `up` and the session's `transport`.
-    - `path_lost`: set `lost`.
-- `unavailable`: `live` becomes `{}` and `synced` false. Keep `ended`, `epoch` and `generation`. This means no stale Connected while the daemon is gone (P21).
+`parseCodeInput` rules:
+- Trim the input.
+- If it contains anything other than digits, `-` or spaces, return `{display: raw, code: null, problem: "characters"}`.
+- Otherwise strip the separators to get the digits.
+  - More than 10 digits: `problem: "length"`, with `display` = the first 10 digits formatted.
+  - Otherwise `display` = the first 4 digits, then `-` and the rest once there are more than 4.
+- `code` is set (`"NNNN-NNNNNN"`) only when the trimmed input matches `^\d{10}$` or `^\d{4}[- ]\d{6}$`. So `"0012-345678"`, `"0012345678"` and `"0012 345678"` are valid, and `"00-12345678"`, `"0012--345678"`, `"0012-3456"` and `"0012-34567a"` aren't.
+- Leading zeroes are always kept, because codes are strings and never numbers.
 
 ```ts
-// useSessions.ts
-export interface SessionHubPort {
-  subscribe(onMessage: (m: HubMessage) => void): Promise<() => void>;
-  resync(): Promise<void>;
-}
-export function useSessions(port: SessionHubPort, clock: Clock): SessionStoreState;
+// pairPort.ts
+export type ConnectOutcome =
+  | { outcome: "connected"; session_id: string; device_id: string; adb_addr: string }
+  | { outcome: "malformed" } | { outcome: "not_ready" } | { outcome: "already_pending" }
+  | { outcome: "bad_code" } | { outcome: "unavailable" } | { outcome: "cancelled" }
+  | { outcome: "failed"; code: number | null };
+export interface PairPort { connect(code: string): Promise<ConnectOutcome>; cancel(): Promise<boolean> }
+export function outcomeMessage(o: ConnectOutcome): string | null;   // null for connected and cancelled
 ```
 
-`useSessions` subscribes **first**, then calls `resync()` once (a late-loading UI still gets a fresh snapshot: P17 restore). It reduces with `clock.now()` at arrival and unsubscribes on unmount. Use `useReducer` or `useState`, with no state library.
+Copy is exact:
+- `bad_code`: "That code didn't work. Check the 10 digits and that the phone is still hosting. After 3 wrong tries the phone shows a new code."
+- `unavailable`: "The phone can't be reached right now. Make sure Setu is hosting on the phone, then try again."
+- `not_ready`: "The Setu service isn't ready yet. Try again in a moment."
+- `already_pending`: "A connection is already in progress."
+- `malformed`: "Enter the 10 digits shown on the phone."
+- `failed`: "Couldn't connect (error N). Try again." When `code` is null: "Couldn't connect. Try again."
+
+`PairDialog({ port, onClose })`:
+- A `role="dialog"` with `aria-labelledby` on the heading "Pair new device".
+- One `<input>` labelled "Pairing code", with `inputMode="numeric"`, `autoComplete="off"` and `spellCheck={false}`. Its value is `parseCodeInput(raw).display`.
+- While `problem` is set, show the inline hint "Use only the 10 digits shown on the phone." and set `aria-invalid`.
+- **Connect** is enabled only when `code !== null` and nothing is pending.
+- While pending:
+  - Show "Connecting…".
+  - Disable the input and Connect.
+  - **Cancel** calls `port.cancel()`.
+- Closing:
+  - With no connect pending, Cancel just calls `onClose()`.
+  - `connected` or `cancelled` calls `onClose()`.
+  - Any other outcome shows `outcomeMessage` in `role="alert"`, keeps the typed code so the user can fix it, and re-enables the form.
+- No timer, countdown or code-expiry text, ever (P03: only the phone's SDK event changes the code).
+- The code lives only in component state: no storage, no URL, no `console`.
+
+`App`: a "Pair new device" button renders `<PairDialog port={pairPort} onClose={…} />`. Keep the DT-03b session line.
 
 ## 4. TDD: write these tests first, see them fail, then implement
 
-- **Rust unit tests (`model.rs`):**
-  - Every allowlisted type parses from a §2.2-shaped notification.
-  - `audit`, `token_updated`, `pairing_code`, `adb_pair`, `paired` and an unknown `"future_thing"` are `Ignored`.
-  - A `path_up` missing `fields.session_id` is `Ignored`, and so is an event with `session: ""`.
-  - `session_down` with `fields.error` is `abnormal: true`, and the error text doesn't appear in `serde_json::to_string`.
-  - `events.dropped {count: 17}` gives `Dropped{17}`.
-  - `serde_json::to_value` shapes for one `Snapshot` and one `Event` (assert `kind`, `type`, field names).
-- **Rust unit tests (`gate.rs`):**
-  - `Live` passes events through with the current epoch.
-  - Resync buffers, then emits Snapshot followed by the buffered events in order, all with the new epoch.
-  - `request_resync` during `Resyncing` makes `on_sessions` ask for a second list, and the pre-gap buffer is discarded.
-  - Epoch strictly increases across `begin` and resyncs.
-- **Rust integration (`tests/event_hub.rs`, FakeDaemon).** Build a `watch` channel by hand with `Ready{ listen: fake.addr(), .. }`. The `client` can come from a second FakeDaemon. Write the token into a tempdir `daemon.token`.
-  - Order on the wire: `auth` (with that token), then `events.subscribe`, then `session.list`. Then a `Snapshot` is emitted.
-  - **P21:**
-    1. After the first snapshot, script a second `session.list` with `reply_delayed` of 300 ms.
-    2. Push `events.dropped`, then a `path_up` event.
-    3. Assert that nothing is emitted before the second `Snapshot`, that its epoch is higher, and that the `path_up` Event follows it with the same epoch.
-  - **P18:** sending `Ready` with generation 2 and a new FakeDaemon gives a new connection, a `Snapshot{generation: 2}` and a higher epoch.
-  - `fake.close()` emits `Unavailable`. `Stopped` emits `Unavailable` once and makes no further connection attempt within 1.5 s.
-  - **P17:** `hub.resync()` with live sessions emits a fresh snapshot with the same ids. After dropping the hub, `received()` contains no `session.stop` and no `events.unsubscribe`.
-  - `connect_authenticated` to `10.0.0.1:7605` returns `Unauthorized` without connecting. A missing token also returns `Unauthorized`.
-- **UI (Vitest):**
-  - `reduce` table:
-    - A snapshot replaces a stale "up" session that isn't in the list.
-    - Old-epoch snapshots and events are ignored, as are events while not synced.
-    - `session_up` is idempotent.
-    - `path_*` for an unknown or ended session is ignored.
-    - `path_up` after `path_lost` on the same tunnel is ignored, while a new tunnel id on the same session still applies.
-    - `path_up` with transport `lan` after `relay-wss` updates `transport`.
-    - `peer_closed` then `session_down` keeps the reason `peer_closed`.
-    - `ended` is capped at 20, newest first.
-    - `unavailable` clears live sessions and keeps ended ones.
-    - The input state is never mutated (`Object.freeze` the input).
-  - `path_down` stamps `since` from the `now` argument.
-  - `useSessions` with a fake port and fake clock:
-    - `subscribe` is called before `resync`.
-    - Messages pushed through the port reduce into the returned state.
-    - Unmount calls the unsubscribe function.
-  - `App` shows "No live sessions" and then "1 live session" after a snapshot from the fake port.
+- **`tests/rpc_client.rs` (FakeDaemon):**
+  - **Cancel mid-call:**
+    1. Script the `session.connect` reply with `reply_error_delayed` (-32022, kind `cancelled`, 300 ms) and `session.cancel` with `{cancelled:1}`.
+    2. Fire `cancel` after the connect is received.
+    3. The result is `Err(Cancelled)`.
+    4. `received()` shows the `session.cancel` params `{"request_id": <connect's id>}`.
+  - A dropped cancel sender behaves exactly like `call`: the result comes through and no `session.cancel` is sent.
+  - Cancel during the busy back-off: first reply -32027, then fire `cancel`. The result is `Err(Cancelled)`, with exactly one `session.connect` and no `session.cancel` received.
+  - Cancel after the reply has arrived does nothing.
+- **`commands/session.rs` unit tests:**
+  - `PairingCode::parse` accepts `0012-345678` and rejects `0012345678`, `00123-45678`, letters, `""` and 11 digits.
+  - The `ConnectOutcome` serde tags and field names.
+  - `cancel_pending` on an empty slot returns `false`.
+- **`tests/session_commands.rs` (FakeDaemon):**
+  - **P02:** `"0012-345678"` sends exactly `{"pairing_code":"0012-345678","timeout_ms":60000}`, and a scripted `SessionInfo` gives `Connected`.
+  - `Malformed` and `NotReady` send nothing to the daemon.
+  - -32013 → `BadCode` and -32011 → `Unavailable`. -32020 → `Failed{code: Some(-32020)}`.
+  - **P19:** start a connect, then `cancel_pending` returns `true`. The outcome is `Cancelled`, and the `session.cancel` request id equals the connect's id.
+  - A second concurrent connect → `AlreadyPending`, and a connect after the first one finishes is accepted, so the slot was cleared.
+  - Neither the code string nor any `ConnectOutcome` JSON contains the code, except the request params sent to the daemon.
+- **UI (Vitest + Testing Library, with a fake `PairPort`):**
+  - `parseCodeInput` table, covering every example in §3, including leading zeroes and paste of `"0012345678"` → `"0012-345678"`.
+  - **P02:** typing `0012345678` shows `0012-345678`, and Connect calls `port.connect("0012-345678")` once. Letters or a partial code keep Connect disabled and show the hint.
+  - **P19:** with a pending connect that resolves only after `cancel()`, Cancel calls `port.cancel()`, then `cancelled` closes the dialog without an alert.
+  - Each error outcome shows its exact copy in `role="alert"` and keeps the input value.
+  - No element's text matches `/\d+\s*(s|sec|min)|expire/i` (no timer, P03).
+  - `localStorage` and `sessionStorage` are empty after a submit.
+  - **App:** the button opens the dialog and `onClose` hides it.
 
 ## 5. Gates (all must pass before you push)
 
@@ -232,27 +211,31 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Also run `npm run tauri dev` once with `SETU_RELAY_URL` and `SETU_DAEMON_PATH` pointing at a real `setu-daemon` v1.1.0. Confirm in the PR that the line shows "No live sessions" once the daemon is ready. If you can pair a phone, also confirm "1 live session". If you can't, say so; it isn't required. Name the OS.
+Also run `npm run tauri dev` once with a real `setu-daemon` v1.1.0 (`SETU_RELAY_URL`, `SETU_DAEMON_PATH`).
+- Confirm that a malformed code can't be submitted.
+- Confirm that submitting a well-formed code with no phone hosting ends in an error message or a pending state, and that Cancel then closes the dialog cleanly.
+- If you can pair a real phone, confirm that "1 live session" appears. Otherwise say so; it isn't required.
+- Name the OS.
 
-Use no `#[allow(...)]`, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no `unwrap()`/`expect()` outside tests, and no clippy or lint downgrades. If a gate fails for a reason you can't fix in code, stop and report the exact error.
+Use no `#[allow(...)]`, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no `unwrap()` or `expect()` outside tests (the existing `expect("pending calls")` lock calls in `client.rs` may stay), and no clippy or lint downgrades. If a gate fails for a reason you can't fix in code, stop and report the exact error.
 
 ## 6. Architecture and Karpathy pillars (enforced at review)
 
-- **Rust/React separation.** The token, the daemon connection and the raw event JSON stay in Rust. React sees only `HubMessage` through one event and one command (AD-9, AD-11). The ordering guarantee (snapshot before held events) lives in the Rust gate. The reducer is a second, pure line of defence (epoch and liveness checks), not the place where ordering is decided.
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If the daemon's real event shapes differ from §1.5 or §2.2 (check `core/internal/daemon` at `v1.1.0` if unsure), follow the daemon, record it there, and stop only if it changes the contract above.
-2. **Simplicity first.** One hub task and one gate. No generic event bus, no trait objects for the sink (an mpsc receiver is the seam), no state library, no selectors, no memoization helpers. Keep files under ~250–300 lines.
-3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-03b-event-hub`. Make atomic conventional commits:
-   - `refactor(desktop): …` for `Ready.listen` and `connect_authenticated`, with existing tests green
+- **Rust/React separation.** The JSON-RPC id, the connection and the error objects stay in Rust. React sends the formatted code once and gets back only a `ConnectOutcome`. Rust re-validates the code and never trusts the UI's formatting.
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If the daemon behaves differently from §2.4 (for example, the cancel answers `{cancelled:0}` because the connect already finished), handle it the way §3 describes and record it there.
+2. **Simplicity first.** One slot, one dialog, no router, no form library, no state library, no styling. Keep files under ~250–300 lines.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-04-pair-dialog`. Make atomic conventional commits:
+   - `refactor(desktop): …` for the `request_once` split, with existing tests green
    - `test(desktop): …` red
    - `feat(desktop): …` green
 4. **Goal-driven TDD.** Commit the failing tests first, then the implementation. Paste the red excerpt and the full green output of every gate in the PR.
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `feat(desktop): DT-03b event hub and session store`, with this body:
+Open one PR against `main` titled `feat(desktop): DT-04 solo pairing form with cancel`, with this body:
 
 ```
-Ticket: DT-03b (docs/TDD_TICKETS.md §5) · Acceptance: P21, P18 re-list, P17 restore, P14 (stale session/tunnel ignored)
+Ticket: DT-04 (docs/TDD_TICKETS.md §5) · Acceptance: P02, P03, P19
 
 ## Assumptions & Trade-offs
 - …
@@ -264,10 +247,10 @@ Ticket: DT-03b (docs/TDD_TICKETS.md §5) · Acceptance: P21, P18 re-list, P17 re
 OS: …
 <red run excerpt>
 <full green output of every gate>
-<tauri dev manual check: daemon ready, "No live sessions" (and "1 live session" if a phone was paired)>
+<tauri dev manual check: malformed blocked, pending + Cancel, (1 live session if a phone was paired)>
 
 ## Out of scope (left for later tickets)
-- pairing form and cancel (DT-04), session card and transport copy (DT-06), rejoin timing and banners (DT-07), tray and quit (DT-09), corporate devices.presence resync (DT-15), end-state copy (DT-16)
+- local ADB attach (DT-05), session card (DT-06), device list and device_id reconnect (DT-08), Android debugger pairing (DT-10)
 ```
 
-Then **stop immediately**. Don't start DT-04, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start DT-05, don't edit `docs/`, and don't merge.

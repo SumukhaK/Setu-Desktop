@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-21 · main @ `0159627` (DT-03a merged, DT-03b prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-21 · main @ `c01068a` (DT-03b merged, DT-04 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -30,15 +30,22 @@ src/                                   React UI (Vite root; AD-9)
   index.html main.tsx App.tsx          App(port) = heading + StatusStrip
   daemon/status.ts                     DaemonStatus, DaemonPort, statusLabel(), useDaemonStatus(port)
   daemon/StatusStrip.tsx               role="status", "Checking…" until first status
-  platform/tauri.ts                    tauriDaemonPort: the only @tauri-apps/api import
+  state/clock.ts                       Clock { now() } + systemClock (performance.now)
+  state/sessionStore.ts                HubMessage/HubEvent mirrors, SessionStoreState, pure reduce(state, msg, now)
+  state/useSessions.ts                 SessionHubPort, useSessions(port, clock): subscribe first, then resync()
+  platform/tauri.ts                    tauriDaemonPort, tauriSessionHubPort: the only @tauri-apps/api import
   test/setup.ts                        jest-dom + cleanup
 src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (default-run) + bin `fake-setu-daemon`
   Cargo.toml Cargo.lock build.rs       build.rs: tauri_build + Windows test manifest / WebView2Loader.dll copy (GNU)
   tauri.conf.json capabilities/ icons/ one "main" window "Setu", strict CSP, bundle inactive, no externalBin
   src/main.rs                          setu_desktop::app::run()
-  src/lib.rs                           pub mod app; pub mod daemon; pub mod rpc;
+  src/lib.rs                           pub mod app; pub mod daemon; pub mod events; pub mod rpc;
   src/app/mod.rs                       #[cfg(not(test))] mod shell: builder, single-instance, setup, status forwarder, daemon_status
   src/app/status.rs                    AppStatus, status_of, resolve_daemon_path, resolve_relay (+ unit tests)
+  src/events/model.rs                  SessionInfo, HubEvent (9-type allowlist), HubMessage, parse_notification, parse_session_list
+  src/events/gate.rs                   ResyncGate: epoch, Live | Resyncing{buffer, again}
+  src/events/hub.rs                    EventHub task: dedicated connection, subscribe → list → ordered forward, 1 s retry
+  tests/event_hub.rs                   8 hub tests (wire order, P21, P18, P17, close/Stopped, auth rejection)
   src/rpc/mod.rs                       re-exports
   src/rpc/framing.rs                   encode(), LineDecoder, MAX_LINE_BYTES (1 MiB, excl. newline)
   src/rpc/client.rs                    RpcClient, Notification, VersionInfo (~265 lines)
@@ -68,6 +75,9 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - `daemon::Workspace::corporate(slug)` validates `[a-z0-9-]{1,63}`, no leading `-`. `read_attach_record` / `write_attach_record` (atomic) / `remove_attach_record`. Attach only to loopback records.
 - `app::status::AppStatus` (serde tag `state`, snake_case): `NotConfigured | Starting | Ready{version: Option<String>, attached, generation} | Restarting{attempt, retry_in_ms} | Failed{reason} | Stopped`. Native → UI: `invoke("daemon_status")` + event `"daemon-status"`.
 - `app::run()` (not in unit-test builds): starts the Solo supervisor when `SETU_RELAY_URL` resolves, label from `COMPUTERNAME`/`HOSTNAME`, keeps the `Supervisor` in managed state, never stops it on close.
+- `daemon::connect_authenticated(listen, &state_dir) -> Result<(RpcClient, Receiver<Notification>), SetuError>`: loopback only, token from `<state>/daemon.token`; else `Unauthorized`. `DaemonState::Ready` now has `listen: SocketAddr`.
+- `events::start(watch::Receiver<DaemonState>, state_dir) -> (EventHub, UnboundedReceiver<HubMessage>)`; `EventHub::resync()`. `HubMessage` (tag `kind`): `Snapshot{epoch, generation, sessions}` | `Event{epoch, generation, event}` | `Unavailable{generation}`. `HubEvent` (tag `type`): listening, session_up, retrying, session_down{abnormal}, path_down/up/lost{tunnel_id}, session_expired, peer_closed. Native → UI: event `"session-hub"` + command `session_resync`.
+- UI store: snapshot replaces `live` (epoch must not go back); events need `synced` and the same epoch; terminal events move a live session to `ended` (max 20, first reason wins); path events for non-live sessions or `lost` tunnels are ignored; `unavailable` clears `live`.
 - UI: `DaemonPort { current(), subscribe(cb) → Promise<unsubscribe> }`; `useDaemonStatus` subscribes first, a pushed status beats a late `current()`.
 - Test support: `FakeDaemon::start()`, `addr()`, `received()`, `wait_for_requests(n)`, `reply_with`, `reply_with_error`, delayed/reversed replies, `send_raw`, notifications, `close()`. Unscripted methods get `-32601`.
 
@@ -81,6 +91,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | `event`, `events.dropped` notifications (raw) | `Notification` channel | DT-01 |
 | daemon flags §2, `daemon_ready`, `daemon.token` | `daemon::{config, ready_line, supervisor}` | DT-02 |
 | `version` shown in the status strip once Ready | `app::shell` forwarder → `AppStatus::Ready.version` | DT-03a |
+| `events.subscribe`, `event`, `events.dropped`, `session.list` | `events::{hub, gate, model}` → `src/state/sessionStore.ts` | DT-03b |
 
 ## Architecture decisions (binding on builders)
 
@@ -92,6 +103,8 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - AD-6 (DT-02): The supervisor takes the daemon executable path as input. Bundling `setu-daemon` as a Tauri sidecar (`tauri.conf.json` `externalBin`) moves to DT-17 (AD-8).
 - AD-8 (DT-03a): No sidecar yet. Tauri v2 `externalBin` fails the build when `binaries/setu-daemon-<triple>` is missing, so the app resolves the daemon at runtime: `SETU_DAEMON_PATH` if set, else `setu-daemon[.exe]` next to the app executable. DT-17 adds the checksummed fetch and the sidecar. The Solo relay URL comes from `SETU_RELAY_URL` (runtime env, then compile-time `option_env!`) until DT-12; without one the app shows "No relay configured" and starts no supervisor.
 - AD-9 (DT-03a): UI ports. React code never imports `@tauri-apps/api` outside `src/platform/tauri.ts`; features take a typed port (`DaemonPort`) so Vitest uses a fake. Native → UI state is pushed as Tauri events plus one initial `invoke` read; payloads are plain serde structs that can't hold secrets.
+- AD-10 (DT-03b): The supervisor's connection is the liveness probe and never subscribes. The event hub opens its own authenticated connection (`connect_authenticated`), calls `events.subscribe` before `session.list`, and the Rust `ResyncGate` holds events until the snapshot (P21). The UI reducer's epoch/liveness checks are a second line of defence, not the ordering mechanism.
+- AD-11 (DT-03b): Raw daemon events never cross the bridge. Only the typed `HubEvent` allowlist does; unknown, malformed and secret-bearing types (`audit`, `token_updated`, `pairing_code`, …) are dropped, and error strings are never forwarded.
 - AD-7 (DT-02): `setu-daemon` v1.1.0 has no single-instance guard per state dir. The app records the live daemon in `<state>/desktop-daemon.json` (`listen`, `pid`, `version`; no secrets). On start it attaches when that address authenticates with `<state>/daemon.token`, else it spawns.
 
 ## Completed tickets
@@ -100,11 +113,13 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| DT-03b | [#13](https://github.com/SumukhaK/Setu-Desktop/pull/13) | Event hub (dedicated connection, resync gate, typed allowlist) and pure session store + `useSessions`. No review round; gates re-run on Linux; `session.list` shape checked against daemon v1.1.0 (empty list is `[]`, not null). |
 | DT-03a | [#11](https://github.com/SumukhaK/Setu-Desktop/pull/11) | Tauri v2 shell, single instance, Solo supervisor start, live daemon status strip, UI toolchain and gates. No review round; gates re-run on Linux by the reviewer. |
 
 ## Open items
 
-- Active ticket: DT-03b · Event hub and session store (prompt issued 2026-11-21). It adds AD-10 (dedicated events connection; `DaemonState::Ready.listen`, `daemon::connect_authenticated`) and AD-11 (typed event allowlist across the bridge); record both here after merge.
+- Active ticket: DT-04 · Solo pairing form with cancel (prompt issued 2026-11-21). It adds AD-12: `RpcClient::call_cancellable` sends `session.cancel {request_id}` for its own in-flight id, so ids never leave `rpc/`.
+- Hub nits from the DT-03b review (non-blocking): a failing connect emits `Unavailable` every 1 s retry; setup now resolves `app_data_dir()` even in NotConfigured mode.
 - `build.rs` locates `WebView2Loader.dll` as `OUT_DIR` 4 levels up, which matches Cargo's new build-dir layout only; an older Cargo on Windows GNU fails the build. Switching the dev machine to the MSVC toolchain would remove the workaround.
 - The CSP `style-src 'self'` blocks Vite's dev-time `<style>` injection. The first ticket that adds CSS (likely DT-06) must use linked stylesheets or adjust dev CSP deliberately.
 - If `version` fails once for a generation it is not retried, so the strip shows "Setu service ready" without a version. Acceptable; revisit if it shows up in practice.
