@@ -111,6 +111,16 @@ impl RpcClient {
     }
 
     async fn request_once(&self, method: &str, params: Option<Value>) -> Result<Value, SetuError> {
+        let (_, mut reply_rx) = self.send_request(method, params)?;
+        Self::await_reply(&mut reply_rx).await
+    }
+
+    /// Allocate an id, register the pending reply and write the request.
+    fn send_request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<(u64, oneshot::Receiver<Result<Value, SetuError>>), SetuError> {
         let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
         let (reply_tx, reply_rx) = oneshot::channel();
         {
@@ -156,6 +166,14 @@ impl RpcClient {
                 return Err(SetuError::Disconnected);
             }
         }
+        Ok((id, reply_rx))
+    }
+
+    /// Wait for a pending reply without owning the receiver, so a select can
+    /// observe a cancel signal and still keep waiting on the same reply.
+    async fn await_reply(
+        reply_rx: &mut oneshot::Receiver<Result<Value, SetuError>>,
+    ) -> Result<Value, SetuError> {
         match reply_rx.await {
             Ok(reply) => reply,
             // The pending entry was dropped by close(): the connection is closed.
