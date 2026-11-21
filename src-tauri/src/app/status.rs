@@ -199,6 +199,7 @@ mod tests {
         let (client, _notifications) = crate::rpc::RpcClient::connect(addr).await.expect("connect");
         let state = DaemonState::Ready {
             client,
+            listen: "127.0.0.1:7605".parse().unwrap(),
             generation: 7,
             pid: 4242,
             attached: true,
