@@ -1,7 +1,9 @@
 import { StatusStrip } from "./daemon/StatusStrip";
 import type { DaemonPort } from "./daemon/status";
+import type { SessionHubPort } from "./state/useSessions";
 
-export function App({ port }: { port: DaemonPort }) {
+export function App({ port, hubPort }: { port: DaemonPort; hubPort: SessionHubPort }) {
+  void hubPort;
   return (
     <main className="app">
       <header className="app-header">

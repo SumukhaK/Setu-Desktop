@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
-import { tauriDaemonPort } from "./platform/tauri";
+import { tauriDaemonPort, tauriSessionHubPort } from "./platform/tauri";
 
 const root = document.getElementById("root");
 if (root === null) {
@@ -11,6 +11,6 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <App port={tauriDaemonPort} />
+    <App port={tauriDaemonPort} hubPort={tauriSessionHubPort} />
   </StrictMode>,
 );
