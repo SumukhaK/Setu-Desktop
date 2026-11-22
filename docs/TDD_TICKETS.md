@@ -17,7 +17,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-04 · Solo pairing form with cancel · Done in [#15](https://github.com/SumukhaK/Setu-Desktop/pull/15)
 - [x] DT-05 · Local ADB adapter · Done in [#17](https://github.com/SumukhaK/Setu-Desktop/pull/17)
 - [x] DT-06 · Session card and status strip · Done in [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19)
-- [ ] DT-07 · Path and rejoin banners
+- [x] DT-07 · Path and rejoin banners · Done in [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21)
 - [ ] DT-08 · Devices list, forget and nicknames (solo)
 - [ ] DT-09 · Tray and background
 - [ ] DT-10 · Android 11+ debugger pairing
@@ -221,7 +221,7 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **SDK binding:** `path_down`, `path_up`, `path_lost`, `retrying`, `session_down`.
 
 ### DT-08 · Devices list, forget and nicknames (solo)
-- **Files:** `src/features/devices/DeviceList.tsx`, `DeviceDetail.tsx`, `src-tauri/src/store/nicknames.rs` (SQLite, keyed by exact `device_id`).
+- **Files:** `src/features/devices/DeviceList.tsx`, `DeviceDetail.tsx`, `src-tauri/src/store/nicknames.rs` (atomic JSON file per workspace, keyed by exact `device_id`; AD-14 replaced SQLite).
 - **Tests first:** P08 solo part (presence unknown; nickname never alters the id), P17 forget (copy says it does not revoke on the phone).
 - **SDK binding:** `devices.list`, `devices.forget {device_id}`, `session.connect {device_id}`.
 

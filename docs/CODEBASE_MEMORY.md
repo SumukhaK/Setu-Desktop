@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-22 · main @ `0c25a71` (DT-06 merged, DT-07 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-22 · main @ `b6038fd` (DT-07 merged, DT-08 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -32,7 +32,7 @@ src/                                   React UI (Vite root; AD-9)
   daemon/StatusStrip.tsx               role="status", "Checking…" until first status
   features/adb/                       adbStatus (AdbSnapshot mirror, attachmentOf exact serial, labels), useAdbStatus, SessionAdbLine (+ Connect ADB)
   features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog
-  features/session/                   transport (transportOf path>audit>unknown, transportLabel), StatusStrip, sessionPort (StopOutcome, stopMessage), SessionCard
+  features/session/                   transport (transportOf path>audit>unknown, transportLabel), StatusStrip, sessionPort (StopOutcome, stopMessage), SessionCard(clock), rejoinMachine (rejoinViewOf, nextWakeAt), RejoinBanner
   state/clock.ts                       Clock { now() } + systemClock (performance.now)
   state/sessionStore.ts                HubMessage/HubEvent mirrors, SessionStoreState, pure reduce(state, msg, now)
   state/useSessions.ts                 SessionHubPort, useSessions(port, clock): subscribe first, then resync()
@@ -87,7 +87,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - `app::run()` (not in unit-test builds): starts the Solo supervisor when `SETU_RELAY_URL` resolves, label from `COMPUTERNAME`/`HOSTNAME`, keeps the `Supervisor` in managed state, never stops it on close.
 - `daemon::connect_authenticated(listen, &state_dir) -> Result<(RpcClient, Receiver<Notification>), SetuError>`: loopback only, token from `<state>/daemon.token`; else `Unauthorized`. `DaemonState::Ready` now has `listen: SocketAddr`.
 - `events::start(watch::Receiver<DaemonState>, state_dir) -> (EventHub, UnboundedReceiver<HubMessage>)`; `EventHub::resync()`. `HubMessage` (tag `kind`): `Snapshot{epoch, generation, sessions}` | `Event{epoch, generation, event}` | `Unavailable{generation}`. `HubEvent` (tag `type`): listening, session_up, retrying, session_down{abnormal}, path_down/up/lost{tunnel_id}, session_expired, peer_closed, audit_session_start{device_id, tunnel_id, transport}. Native → UI: event `"session-hub"` + command `session_resync`.
-- UI store: snapshot replaces `live` (epoch must not go back); events need `synced` and the same epoch; terminal events move a live session to `ended` (max 20, first reason wins); path events for non-live sessions or `lost` tunnels are ignored; `unavailable` clears `live`. `audit_session_start` sets `auditTransport` only on exactly one live session with that device.
+- UI store: snapshot replaces `live` (epoch must not go back); events need `synced` and the same epoch; terminal events move a live session to `ended` (max 20, first reason wins); path events for non-live sessions or `lost` tunnels are ignored; `unavailable` clears `live`. `audit_session_start` sets `auditTransport` only on exactly one live session with that device. Tunnel states: up{at} | down{since} (a repeated path_down keeps since) | lost{at}.
 - Pairing: commands `session_connect_code(code) -> ConnectOutcome` (tag `outcome`: connected | malformed | not_ready | already_pending | bad_code | unavailable | cancelled | failed{code}) and `session_cancel_connect() -> bool`; client = current `Ready.client`. Rust re-validates `^\d{4}-\d{6}$`. `session_stop(session_id) -> StopOutcome` (stopped | no_session | not_ready | invalid | failed{code}); Rust validates `^s[0-9]{1,9}$`.
 - ADB: event `"adb-status"` + commands `adb_status` / `adb_connect(adb_addr) -> AdbConnectOutcome` (connected | not_loopback | missing | timed_out | failed{detail ≤200}). The watcher runs even without a relay.
 - UI: `DaemonPort { current(), subscribe(cb) → Promise<unsubscribe> }`; `useDaemonStatus` subscribes first, a pushed status beats a late `current()`.
@@ -107,6 +107,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | `session.connect {pairing_code, timeout_ms}`, `session.cancel {request_id}` | `rpc::call_cancellable`, `commands::session`, `features/pair` | DT-04 |
 | `events.subscribe`, `event`, `events.dropped`, `session.list` | `events::{hub, gate, model}` → `src/state/sessionStore.ts` | DT-03b |
 | `session.stop`, audit `session_start` (transport fallback), `path_up` transport | `commands::session`, `events::model` → `features/session` | DT-06 |
+| `path_down` / `path_up` / `path_lost` banners (holding ≥ 10 s, lost only from the SDK) | `features/session/{rejoinMachine, RejoinBanner}` | DT-07 |
 
 ## Architecture decisions (binding on builders)
 
@@ -122,6 +123,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - AD-11 (DT-03b): Raw daemon events never cross the bridge. Only the typed `HubEvent` allowlist does; unknown, malformed and secret-bearing types (`audit`, `token_updated`, `pairing_code`, …) are dropped, and error strings are never forwarded. DT-06 allows one audit shape: `audit_session_start{device_id, tunnel_id, transport}` (desktop role, 16-hex tunnel, known transport); `user`/`token_id` never cross.
 - AD-12 (DT-04): JSON-RPC ids never leave `rpc/`. Cancellation is a signal into `call_cancellable`, which cancels its own in-flight id on the same connection.
 - AD-13 (DT-05): Local ADB is observed, never trusted from the UI. Only loopback serials cross the bridge; `adb connect` runs only in Rust for a loopback `SocketAddr`; attachment = exact serial match in state `device`.
+- AD-14 (DT-08, decided): nicknames are a desktop-only JSON file `<state_dir>/desktop-nicknames.json` (`{version:1, nicknames:{<exact id>: name}}`, atomic write, corrupt → empty), not SQLite. Ids are byte-exact and never normalised; nicknames never reach the daemon.
 - AD-7 (DT-02): `setu-daemon` v1.1.0 has no single-instance guard per state dir. The app records the live daemon in `<state>/desktop-daemon.json` (`listen`, `pid`, `version`; no secrets). On start it attaches when that address authenticates with `<state>/daemon.token`, else it spawns.
 
 ## Completed tickets
@@ -130,6 +132,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| DT-07 | [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21) | Rejoin banners: pure `rejoinMachine`, one-timer `RejoinBanner`, `at` stamps on tunnels, one Clock shared by store and cards. No review round; gates re-run on Linux. |
 | DT-06 | [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19) | Session card, three-fact status strip (Listener, Local ADB, Transport), Disconnect via `session.stop`, audit transport fallback. No review round; gates re-run on Linux. |
 | DT-05 | [#17](https://github.com/SumukhaK/Setu-Desktop/pull/17) | ADB watcher (track-devices-l, reconnect), loopback-only snapshot, `adb connect` with timeout, per-session ADB line. No review round; gates re-run on Linux. |
 | DT-04 | [#15](https://github.com/SumukhaK/Setu-Desktop/pull/15) | Pairing dialog (NNNN-NNNNNN, inline errors, no timer), `call_cancellable`, pairing commands with a single pending slot. No review round; gates re-run on Linux. |
@@ -138,12 +141,10 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 
 ## Open items
 
-- Active ticket: DT-07 · Path and rejoin banners (prompt issued 2026-11-22). UI only: a pure `rejoinMachine` over the store's tunnel states (holding from 10 s, lost only from the SDK's `path_lost`) and one timer in `RejoinBanner`; App passes one Clock to `useSessions` and every card.
-- DT-04 nits (non-blocking): `SlotGuard` clears whatever sender is in the slot, so a connect started after a cancel but before the first call returns could lose its cancel handle (the UI can't trigger it: Connect stays disabled until the outcome); `PairDialog` doesn't catch a rejected `invoke`, which would leave it on "Connecting…". Fix both when DT-06/DT-08 touch these files.
-- Hub nits from the DT-03b review (non-blocking): a failing connect emits `Unavailable` every 1 s retry; setup now resolves `app_data_dir()` even in NotConfigured mode.
-- `build.rs` locates `WebView2Loader.dll` as `OUT_DIR` 4 levels up, which matches Cargo's new build-dir layout only; an older Cargo on Windows GNU fails the build. Switching the dev machine to the MSVC toolchain would remove the workaround.
-- The CSP `style-src 'self'` blocks Vite's dev-time `<style>` injection. The first ticket that adds CSS must use linked stylesheets or adjust dev CSP deliberately.
+- Active ticket: DT-08 · Devices list, forget and nicknames (prompt issued 2026-11-22). Adds `store/nicknames.rs` (AD-14), `commands/devices.rs`, `connect_with_device` sharing the pending slot, ConnectOutcome `not_paired`/`revoked`, and the DT-04 SlotGuard token fix. `devices.forget` success has no `result` field (Go omitempty); `call` maps it to Null.
+- DT-07 nit (non-blocking): `RejoinBanner`'s timer effect depends only on `session`, so a timeout that fires a hair before `since + 10 s` on the monotonic clock redraws "none" and never re-arms until the next event. Add the redraw tick to the effect deps when a ticket next touches it.
+- DT-04 nit (non-blocking): `PairDialog` doesn't catch a rejected `invoke`, which would leave it on "Connecting…". The SlotGuard half is fixed in DT-08. DT-03b hub nits: a failing connect emits `Unavailable` every 1 s retry; setup resolves `app_data_dir()` even in NotConfigured mode.
+- `build.rs` locates `WebView2Loader.dll` as `OUT_DIR` 4 levels up, which matches Cargo's new build-dir layout only; an older Cargo on Windows GNU fails the build. Switching the dev machine to the MSVC toolchain would remove the workaround. Separately, CSP `style-src 'self'` blocks Vite's dev-time `<style>` injection: the first ticket with CSS must use linked stylesheets or adjust dev CSP deliberately.
 - Design rebase merged (#8): the phone's session label is now shown as **Connected as (unverified)** (peerLabel may be the desktop label, corporate user or key fingerprint). The T−5 minute warning hook (`setuDesktopSessionDeadline`) has no v1.1.0 source: native tickets must never feed it a credential `expires_at`. The page allowlist excludes `auth.set_token` and `identity.public_key` (native only, DT-14).
-- If a future daemon writes to stdout after `daemon_ready`, the drain thread ends when the app exits and later writes may hit a closed pipe. v1.1.0 prints only the ready line; recheck on SDK upgrades.
 - No CI yet (candidate `upkeep/` ticket). Merged `feature/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
-- SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes.
+- SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes. v1.1.0 prints only `daemon_ready` on stdout; if a future daemon writes more, recheck the drain thread on SDK upgrades.
