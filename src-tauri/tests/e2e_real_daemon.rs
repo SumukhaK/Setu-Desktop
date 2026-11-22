@@ -148,10 +148,12 @@ fn ready_client(supervisor: &Supervisor) -> Option<RpcClient> {
 }
 
 async fn next_hub(rx: &mut mpsc::UnboundedReceiver<HubMessage>) -> HubMessage {
-    timeout(STEP, rx.recv())
+    let message = timeout(STEP, rx.recv())
         .await
         .expect("a hub message in time")
-        .expect("the hub channel is open")
+        .expect("the hub channel is open");
+    println!("hub: {message:?}");
+    message
 }
 
 fn cnxn_header() -> [u8; 24] {
@@ -170,22 +172,26 @@ fn cnxn_header() -> [u8; 24] {
     header
 }
 
-async fn roundtrip(addr: SocketAddr) {
-    let mut stream = timeout(STEP, AsyncTcpStream::connect(addr))
-        .await
-        .expect("connect to the local ADB endpoint")
-        .expect("local ADB endpoint accepts connections");
+async fn try_roundtrip(addr: SocketAddr) -> bool {
+    let Ok(Ok(mut stream)) = timeout(STEP, AsyncTcpStream::connect(addr)).await else {
+        return false;
+    };
     let header = cnxn_header();
-    timeout(STEP, stream.write_all(&header))
-        .await
-        .expect("write the CNXN header")
-        .expect("header was written");
+    if !matches!(timeout(STEP, stream.write_all(&header)).await, Ok(Ok(()))) {
+        return false;
+    }
     let mut reply = [0u8; 24];
-    timeout(STEP, stream.read_exact(&mut reply))
-        .await
-        .expect("read the echoed header")
-        .expect("header was read");
-    assert_eq!(reply, header, "the tunnel must echo the 24-byte header");
+    matches!(
+        timeout(STEP, stream.read_exact(&mut reply)).await,
+        Ok(Ok(_)) if reply == header
+    )
+}
+
+async fn roundtrip(addr: SocketAddr) {
+    assert!(
+        try_roundtrip(addr).await,
+        "the tunnel must echo the 24-byte header"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -316,10 +322,21 @@ async fn run(bin_dir: PathBuf) {
 
     roundtrip(addr).await;
 
+    // Let the freshly paired tunnel settle before breaking the relay; a kill
+    // during the initial handshake would be a connect failure, not an outage.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
     // The relay disappears for four seconds, then returns on the same port.
     relay.take().expect("a running relay");
     tokio::time::sleep(Duration::from_secs(4)).await;
     let _relay_after_outage = start_relay(&bin_dir, relay_port, &relay_state);
+
+    // Traffic exercises the rejoined path; without it a quiet tunnel can stay
+    // silent until its next keepalive, well past this smoke test's budget.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !try_roundtrip(addr).await && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
 
     let mut down_tunnel: Option<String> = None;
     timeout(Duration::from_secs(20), async {
