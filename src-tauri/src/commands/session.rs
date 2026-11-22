@@ -114,6 +114,41 @@ pub async fn connect_with_code(
     }
 }
 
+#[derive(Clone, Serialize, PartialEq, Debug)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum StopOutcome {
+    Stopped,
+    NoSession,
+    NotReady,
+    Invalid,
+    Failed { code: Option<i64> },
+}
+
+/// Stop one client session by its `s<n>` id. Rust owns the id validation and
+/// the `session.stop` call; the UI only gets a typed outcome.
+pub async fn stop_session(client: Option<RpcClient>, session_id: &str) -> StopOutcome {
+    let bytes = session_id.as_bytes();
+    if bytes.first() != Some(&b's')
+        || bytes.len() < 2
+        || bytes.len() > 10
+        || !bytes[1..].iter().all(u8::is_ascii_digit)
+    {
+        return StopOutcome::Invalid;
+    }
+    let Some(client) = client else {
+        return StopOutcome::NotReady;
+    };
+
+    match client
+        .call("session.stop", Some(json!({ "session_id": session_id })))
+        .await
+    {
+        Ok(_) => StopOutcome::Stopped,
+        Err(SetuError::NoSession) => StopOutcome::NoSession,
+        Err(error) => StopOutcome::Failed { code: error.code() },
+    }
+}
+
 pub fn cancel_pending(pending: &PendingConnect) -> bool {
     let sender = pending
         .0
@@ -164,6 +199,23 @@ mod tests {
             serde_json::to_value(ConnectOutcome::BadCode).unwrap()["outcome"],
             "bad_code"
         );
+    }
+
+    #[test]
+    fn stop_outcome_json_uses_the_bridge_tags() {
+        let stopped = serde_json::to_value(StopOutcome::Stopped).unwrap();
+        assert_eq!(stopped["outcome"], "stopped");
+        assert_eq!(
+            serde_json::to_value(StopOutcome::NoSession).unwrap()["outcome"],
+            "no_session"
+        );
+        assert_eq!(
+            serde_json::to_value(StopOutcome::Invalid).unwrap()["outcome"],
+            "invalid"
+        );
+        let failed = serde_json::to_value(StopOutcome::Failed { code: Some(-32603) }).unwrap();
+        assert_eq!(failed["outcome"], "failed");
+        assert_eq!(failed["code"], -32603);
     }
 
     #[test]

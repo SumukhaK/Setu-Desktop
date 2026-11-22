@@ -18,6 +18,7 @@ mod shell {
 
     use crate::adb::{self, AdbConnectOutcome, AdbSnapshot, AdbWatcher};
     use crate::app::status::{resolve_daemon_path, resolve_relay, status_of, AppStatus};
+    use crate::commands::session::{stop_session, StopOutcome};
     use crate::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
     use crate::events::{start as start_event_hub, EventHub};
@@ -67,6 +68,20 @@ mod shell {
     }
 
     #[tauri::command]
+    async fn session_stop(
+        session_id: String,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<StopOutcome, String> {
+        let client = state.supervisor.as_ref().and_then(|supervisor| {
+            match &*supervisor.subscribe().borrow() {
+                DaemonState::Ready { client, .. } => Some(client.clone()),
+                _ => None,
+            }
+        });
+        Ok(stop_session(client, &session_id).await)
+    }
+
+    #[tauri::command]
     fn adb_status(state: tauri::State<'_, AppState>) -> AdbSnapshot {
         state.adb_status.borrow().clone()
     }
@@ -94,6 +109,7 @@ mod shell {
                 session_resync,
                 session_connect_code,
                 session_cancel_connect,
+                session_stop,
                 adb_status,
                 adb_connect
             ])

@@ -7,6 +7,7 @@ import {
   tauriDaemonPort,
   tauriPairPort,
   tauriSessionHubPort,
+  tauriSessionPort,
 } from "./platform/tauri";
 
 const root = document.getElementById("root");
@@ -21,6 +22,8 @@ createRoot(root).render(
       hubPort={tauriSessionHubPort}
       pairPort={tauriPairPort}
       adbPort={tauriAdbPort}
+      sessionPort={tauriSessionPort}
+      clipboard={navigator.clipboard}
     />
   </StrictMode>,
 );

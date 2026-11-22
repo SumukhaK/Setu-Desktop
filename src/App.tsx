@@ -2,26 +2,38 @@ import { useState } from "react";
 
 import { StatusStrip } from "./daemon/StatusStrip";
 import type { DaemonPort } from "./daemon/status";
-import { SessionAdbLine } from "./features/adb/SessionAdbLine";
 import type { AdbPort } from "./features/adb/adbStatus";
 import { useAdbStatus } from "./features/adb/useAdbStatus";
 import { PairDialog } from "./features/pair/PairDialog";
+import { SessionCard } from "./features/session/SessionCard";
+import type { SessionPort } from "./features/session/sessionPort";
 import type { PairPort } from "./features/pair/pairPort";
 import { systemClock } from "./state/clock";
 import { useSessions } from "./state/useSessions";
 import type { SessionHubPort } from "./state/useSessions";
+
+const noSessionPort: SessionPort = {
+  stop: () => Promise.resolve({ outcome: "not_ready" }),
+};
+const noClipboard = { writeText: () => Promise.resolve() };
 
 export function App({
   port,
   hubPort,
   pairPort,
   adbPort,
+  sessionPort,
+  clipboard,
 }: {
   port: DaemonPort;
   hubPort: SessionHubPort;
   pairPort?: PairPort;
   adbPort?: AdbPort;
+  sessionPort?: SessionPort;
+  clipboard?: { writeText(s: string): Promise<void> };
 }) {
+  const stopPort = sessionPort ?? noSessionPort;
+  const targetClipboard = clipboard ?? noClipboard;
   const sessions = useSessions(hubPort, systemClock);
   const adb = useAdbStatus(adbPort ?? null);
   const [pairing, setPairing] = useState(false);
@@ -37,11 +49,13 @@ export function App({
       <StatusStrip port={port} />
       <p>{line}</p>
       {Object.values(sessions.live).map((session) => (
-        <SessionAdbLine
+        <SessionCard
           key={session.sessionId}
           session={session}
           adb={adb}
-          port={adbPort ?? null}
+          adbPort={adbPort ?? null}
+          sessionPort={stopPort}
+          clipboard={targetClipboard}
         />
       ))}
       {pairPort !== undefined && (

@@ -308,6 +308,68 @@ async fn a_failed_list_is_unavailable_and_a_raw_unknown_event_is_ignored() {
 }
 
 #[tokio::test]
+async fn an_audit_session_start_crosses_the_bridge_but_adb_op_does_not() {
+    let mut h = Harness::new().await;
+    h.script_first_connection();
+    h.ready(1, h.fake.addr()).await;
+    let _snapshot = next(&mut h.messages).await;
+
+    h.fake
+        .notify(
+            "event",
+            event(
+                "audit",
+                "",
+                json!({
+                    "event": "session_start",
+                    "role": "desktop",
+                    "device": "pixel-7",
+                    "session": "4be1c0d2a9f37e11",
+                    "transport": "relay-wss",
+                    "user": "alice",
+                    "token_id": "t-123",
+                }),
+            ),
+        )
+        .await;
+
+    match next(&mut h.messages).await {
+        HubMessage::Event {
+            event:
+                HubEvent::AuditSessionStart {
+                    device_id,
+                    tunnel_id,
+                    transport,
+                },
+            ..
+        } => {
+            assert_eq!(device_id, "pixel-7");
+            assert_eq!(tunnel_id, "4be1c0d2a9f37e11");
+            assert_eq!(transport, "relay-wss");
+        }
+        other => panic!("expected an audit session_start, got {other:?}"),
+    }
+
+    h.fake
+        .notify(
+            "event",
+            event(
+                "audit",
+                "",
+                json!({
+                    "event": "adb_op",
+                    "role": "desktop",
+                    "device": "pixel-7",
+                    "session": "4be1c0d2a9f37e11",
+                    "transport": "relay-wss",
+                }),
+            ),
+        )
+        .await;
+    expect_silent(&mut h.messages, 200).await;
+}
+
+#[tokio::test]
 async fn connect_authenticated_rejects_non_loopback_and_a_missing_token() {
     let tmp = tempfile::tempdir().unwrap();
     let non_loopback: SocketAddr = "10.0.0.1:7605".parse().unwrap();
