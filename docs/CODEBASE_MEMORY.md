@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-21 · main @ `e3ce0f7` (DT-04 merged, DT-05 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-21 · main @ `482c32e` (DT-05 merged, DT-06 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -30,6 +30,7 @@ src/                                   React UI (Vite root; AD-9)
   index.html main.tsx App.tsx          App(port) = heading + StatusStrip
   daemon/status.ts                     DaemonStatus, DaemonPort, statusLabel(), useDaemonStatus(port)
   daemon/StatusStrip.tsx               role="status", "Checking…" until first status
+  features/adb/                       adbStatus (AdbSnapshot mirror, attachmentOf exact serial, labels), useAdbStatus, SessionAdbLine (+ Connect ADB)
   features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog
   state/clock.ts                       Clock { now() } + systemClock (performance.now)
   state/sessionStore.ts                HubMessage/HubEvent mirrors, SessionStoreState, pure reduce(state, msg, now)
@@ -40,9 +41,13 @@ src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (
   Cargo.toml Cargo.lock build.rs       build.rs: tauri_build + Windows test manifest / WebView2Loader.dll copy (GNU)
   tauri.conf.json capabilities/ icons/ one "main" window "Setu", strict CSP, bundle inactive, no externalBin
   src/main.rs                          setu_desktop::app::run()
-  src/lib.rs                           pub mod app; pub mod commands; pub mod daemon; pub mod events; pub mod rpc;
+  src/lib.rs                           pub mod adb; pub mod app; pub mod commands; pub mod daemon; pub mod events; pub mod rpc;
   src/app/mod.rs                       #[cfg(not(test))] mod shell: builder, single-instance, setup, status forwarder, daemon_status
   src/app/status.rs                    AppStatus, status_of, resolve_daemon_path, resolve_relay (+ unit tests)
+  src/adb/protocol.rs                  encode_request, FrameReader (4-hex framing), parse_device_list, is_loopback_serial
+  src/adb/track.rs                     watcher: host:track-devices-l, AdbSnapshot Unknown|Down|Up{devices}, backoff 0.5→5 s, never starts adb
+  src/adb/connect.rs                   resolve_adb_path (SETU_ADB_PATH|adb), resolve_adb_server (ANDROID_ADB_SERVER_PORT|5037), adb_connect → AdbConnectOutcome
+  tests/adb_track.rs tests/adb_connect.rs  7 + 6 tests; support: fake_adb_server.rs, fake_adb.rs ([[bin]] fake-adb)
   src/commands/session.rs              PairingCode (no Debug), ConnectOutcome, PendingConnect slot, connect_with_code, cancel_pending
   tests/session_commands.rs            7 pairing tests (P02, P19, errors, AlreadyPending, no code leak)
   src/events/model.rs                  SessionInfo, HubEvent (9-type allowlist), HubMessage, parse_notification, parse_session_list
@@ -83,6 +88,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - `events::start(watch::Receiver<DaemonState>, state_dir) -> (EventHub, UnboundedReceiver<HubMessage>)`; `EventHub::resync()`. `HubMessage` (tag `kind`): `Snapshot{epoch, generation, sessions}` | `Event{epoch, generation, event}` | `Unavailable{generation}`. `HubEvent` (tag `type`): listening, session_up, retrying, session_down{abnormal}, path_down/up/lost{tunnel_id}, session_expired, peer_closed. Native → UI: event `"session-hub"` + command `session_resync`.
 - UI store: snapshot replaces `live` (epoch must not go back); events need `synced` and the same epoch; terminal events move a live session to `ended` (max 20, first reason wins); path events for non-live sessions or `lost` tunnels are ignored; `unavailable` clears `live`.
 - Pairing: commands `session_connect_code(code) -> ConnectOutcome` (tag `outcome`: connected | malformed | not_ready | already_pending | bad_code | unavailable | cancelled | failed{code}) and `session_cancel_connect() -> bool`; client = current `Ready.client`. Rust re-validates `^\d{4}-\d{6}$`.
+- ADB: event `"adb-status"` + commands `adb_status` / `adb_connect(adb_addr) -> AdbConnectOutcome` (connected | not_loopback | missing | timed_out | failed{detail ≤200}). The watcher runs even without a relay.
 - UI: `DaemonPort { current(), subscribe(cb) → Promise<unsubscribe> }`; `useDaemonStatus` subscribes first, a pushed status beats a late `current()`.
 - Test support: `FakeDaemon::start()`, `addr()`, `received()`, `wait_for_requests(n)`, `reply_with`, `reply_with_error`, delayed/reversed replies, `send_raw`, notifications, `close()`. Unscripted methods get `-32601`.
 
@@ -96,6 +102,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | `event`, `events.dropped` notifications (raw) | `Notification` channel | DT-01 |
 | daemon flags §2, `daemon_ready`, `daemon.token` | `daemon::{config, ready_line, supervisor}` | DT-02 |
 | `version` shown in the status strip once Ready | `app::shell` forwarder → `AppStatus::Ready.version` | DT-03a |
+| ADB host `host:track-devices-l`, `adb connect <adb_addr>` | `adb::{protocol, track, connect}` → `features/adb` | DT-05 |
 | `session.connect {pairing_code, timeout_ms}`, `session.cancel {request_id}` | `rpc::call_cancellable`, `commands::session`, `features/pair` | DT-04 |
 | `events.subscribe`, `event`, `events.dropped`, `session.list` | `events::{hub, gate, model}` → `src/state/sessionStore.ts` | DT-03b |
 
@@ -112,6 +119,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - AD-10 (DT-03b): The supervisor's connection is the liveness probe and never subscribes. The event hub opens its own authenticated connection (`connect_authenticated`), calls `events.subscribe` before `session.list`, and the Rust `ResyncGate` holds events until the snapshot (P21). The UI reducer's epoch/liveness checks are a second line of defence, not the ordering mechanism.
 - AD-11 (DT-03b): Raw daemon events never cross the bridge. Only the typed `HubEvent` allowlist does; unknown, malformed and secret-bearing types (`audit`, `token_updated`, `pairing_code`, …) are dropped, and error strings are never forwarded.
 - AD-12 (DT-04): JSON-RPC ids never leave `rpc/`. Cancellation is a signal into `call_cancellable`, which cancels its own in-flight id on the same connection.
+- AD-13 (DT-05): Local ADB is observed, never trusted from the UI. Only loopback serials cross the bridge; `adb connect` runs only in Rust for a loopback `SocketAddr`; attachment = exact serial match in state `device`.
 - AD-7 (DT-02): `setu-daemon` v1.1.0 has no single-instance guard per state dir. The app records the live daemon in `<state>/desktop-daemon.json` (`listen`, `pid`, `version`; no secrets). On start it attaches when that address authenticates with `<state>/daemon.token`, else it spawns.
 
 ## Completed tickets
@@ -120,13 +128,14 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| DT-05 | [#17](https://github.com/SumukhaK/Setu-Desktop/pull/17) | ADB watcher (track-devices-l, reconnect), loopback-only snapshot, `adb connect` with timeout, per-session ADB line. No review round; gates re-run on Linux. |
 | DT-04 | [#15](https://github.com/SumukhaK/Setu-Desktop/pull/15) | Pairing dialog (NNNN-NNNNNN, inline errors, no timer), `call_cancellable`, pairing commands with a single pending slot. No review round; gates re-run on Linux. |
 | DT-03b | [#13](https://github.com/SumukhaK/Setu-Desktop/pull/13) | Event hub (dedicated connection, resync gate, typed allowlist) and pure session store + `useSessions`. No review round; gates re-run on Linux; `session.list` shape checked against daemon v1.1.0 (empty list is `[]`, not null). |
 | DT-03a | [#11](https://github.com/SumukhaK/Setu-Desktop/pull/11) | Tauri v2 shell, single instance, Solo supervisor start, live daemon status strip, UI toolchain and gates. No review round; gates re-run on Linux by the reviewer. |
 
 ## Open items
 
-- Active ticket: DT-05 · Local ADB adapter (prompt issued 2026-11-22). It adds AD-13: only loopback ADB serials cross the bridge, `adb connect` runs only in Rust for a loopback `SocketAddr`, attachment = exact serial in state `device`.
+- Active ticket: DT-06 · Session card and status strip (prompt issued 2026-11-22). It extends AD-11 with one audit shape (`audit_session_start {device_id, tunnel_id, transport}`); in v1.1.0 the daemon's audit events have an empty `session` and audit is off by default in Solo, so "Path unknown" is the normal Solo display until a `path_up`.
 - DT-04 nits (non-blocking): `SlotGuard` clears whatever sender is in the slot, so a connect started after a cancel but before the first call returns could lose its cancel handle (the UI can't trigger it: Connect stays disabled until the outcome); `PairDialog` doesn't catch a rejected `invoke`, which would leave it on "Connecting…". Fix both when DT-06/DT-08 touch these files.
 - Hub nits from the DT-03b review (non-blocking): a failing connect emits `Unavailable` every 1 s retry; setup now resolves `app_data_dir()` even in NotConfigured mode.
 - `build.rs` locates `WebView2Loader.dll` as `OUT_DIR` 4 levels up, which matches Cargo's new build-dir layout only; an older Cargo on Windows GNU fails the build. Switching the dev machine to the MSVC toolchain would remove the workaround.

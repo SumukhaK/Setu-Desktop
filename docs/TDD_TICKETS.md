@@ -15,7 +15,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-03a · App shell and UI scaffold · Done in [#11](https://github.com/SumukhaK/Setu-Desktop/pull/11)
 - [x] DT-03b · Event hub and session store · Done in [#13](https://github.com/SumukhaK/Setu-Desktop/pull/13)
 - [x] DT-04 · Solo pairing form with cancel · Done in [#15](https://github.com/SumukhaK/Setu-Desktop/pull/15)
-- [ ] DT-05 · Local ADB adapter
+- [x] DT-05 · Local ADB adapter · Done in [#17](https://github.com/SumukhaK/Setu-Desktop/pull/17)
 - [ ] DT-06 · Session card and status strip
 - [ ] DT-07 · Path and rejoin banners
 - [ ] DT-08 · Devices list, forget and nicknames (solo)
