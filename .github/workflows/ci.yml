@@ -47,6 +47,10 @@ jobs:
   gates-windows:
     runs-on: windows-latest
     steps:
+      # Prettier expects LF; git's Windows default checkout would rewrite every
+      # tracked file to CRLF and fail format:check.
+      - name: Preserve LF line endings
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -100,7 +104,7 @@ jobs:
         with:
           go-version-file: setu-sdk/core/go.mod
       - name: Build the SDK binaries
-        run: cd setu-sdk/core && go build -o "$RUNNER_TEMP/setu-bin" ./cmd/setu ./cmd/setu-daemon
+        run: mkdir -p "$RUNNER_TEMP/setu-bin" && cd setu-sdk/core && go build -o "$RUNNER_TEMP/setu-bin" ./cmd/setu ./cmd/setu-daemon
       - name: Run the real-daemon smoke test
         working-directory: src-tauri
         env:
