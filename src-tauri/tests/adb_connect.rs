@@ -134,5 +134,8 @@ async fn non_loopback_addresses_never_spawn_adb() {
         assert_eq!(outcome, AdbConnectOutcome::NotLoopback);
     }
 
-    assert!(!args.exists(), "adb must not run for a non-loopback address");
+    assert!(
+        !args.exists(),
+        "adb must not run for a non-loopback address"
+    );
 }

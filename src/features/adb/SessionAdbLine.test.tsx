@@ -25,7 +25,9 @@ function up(devices: { serial: string; state: string }[]): AdbSnapshot {
 function fakePort(initial: AdbSnapshot = { server: "unknown" }) {
   let push: (snapshot: AdbSnapshot) => void = () => undefined;
   const unsubscribe = vi.fn();
-  const connect = vi.fn((): Promise<AdbConnectOutcome> => Promise.resolve({ outcome: "connected" }));
+  const connect = vi.fn((): Promise<AdbConnectOutcome> =>
+    Promise.resolve({ outcome: "connected" }),
+  );
   const port: AdbPort = {
     current() {
       return Promise.resolve(initial);
@@ -123,10 +125,7 @@ describe("SessionAdbLine", () => {
       "Android Platform Tools (adb) weren't found. Install them or set SETU_ADB_PATH.",
     ],
     [{ outcome: "timed_out" }, "adb connect didn't answer in 10 seconds. Try again."],
-    [
-      { outcome: "not_loopback" },
-      "Setu only connects ADB to this computer's loopback address.",
-    ],
+    [{ outcome: "not_loopback" }, "Setu only connects ADB to this computer's loopback address."],
     [{ outcome: "failed", detail: "Connection refused" }, "adb connect failed: Connection refused"],
   ];
 

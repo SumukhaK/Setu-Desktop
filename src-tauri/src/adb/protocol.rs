@@ -3,32 +3,98 @@
 use crate::adb::track::AdbDevice;
 
 /// Frame a host service request: four lowercase hex digits, then the bytes.
-pub fn encode_request(_service: &str) -> Vec<u8> {
-    todo!()
+pub fn encode_request(service: &str) -> Vec<u8> {
+    format!("{:04x}{service}", service.len()).into_bytes()
 }
 
 /// Accumulates bytes and yields complete framed payloads.
 #[derive(Default)]
-pub struct FrameReader;
+pub struct FrameReader {
+    buffer: Vec<u8>,
+}
 
 impl FrameReader {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
-    pub fn feed(&mut self, _bytes: &[u8]) -> Result<Vec<String>, String> {
-        todo!()
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<String>, String> {
+        self.buffer.extend_from_slice(bytes);
+        let mut payloads = Vec::new();
+
+        loop {
+            if self.buffer.len() < 4 {
+                break;
+            }
+            let length = parse_length(&self.buffer[..4])?;
+            if self.buffer.len() < 4 + length {
+                break;
+            }
+            let payload: Vec<u8> = self.buffer[4..4 + length].to_vec();
+            self.buffer.drain(..4 + length);
+            let payload = String::from_utf8(payload)
+                .map_err(|_| "ADB payload is not valid UTF-8".to_owned())?;
+            payloads.push(payload);
+        }
+
+        Ok(payloads)
     }
+}
+
+fn parse_length(bytes: &[u8]) -> Result<usize, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "ADB length is not hex".to_owned())?;
+    if !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("invalid ADB frame length: {text}"));
+    }
+    usize::from_str_radix(text, 16).map_err(|_| format!("invalid ADB frame length: {text}"))
 }
 
 /// Parse a `track-devices-l` payload into loopback devices, sorted by serial.
-pub fn parse_device_list(_payload: &str) -> Vec<AdbDevice> {
-    todo!()
+pub fn parse_device_list(payload: &str) -> Vec<AdbDevice> {
+    let mut devices: Vec<AdbDevice> = payload
+        .lines()
+        .filter_map(|line| {
+            let mut tokens = line.split_ascii_whitespace();
+            let serial = tokens.next()?;
+            let state = tokens.next()?;
+            if !is_loopback_serial(serial) {
+                return None;
+            }
+            Some(AdbDevice {
+                serial: serial.to_owned(),
+                state: state.to_owned(),
+            })
+        })
+        .collect();
+    devices.sort_by(|left, right| left.serial.cmp(&right.serial));
+    devices
 }
 
 /// True only for `127.0.0.1:<port>`, `[::1]:<port>` and `localhost:<port>`.
-pub fn is_loopback_serial(_serial: &str) -> bool {
-    todo!()
+pub fn is_loopback_serial(serial: &str) -> bool {
+    let (host, port) = if let Some(rest) = serial.strip_prefix('[') {
+        match rest.split_once("]:") {
+            Some((host, port)) => (host, port),
+            None => return false,
+        }
+    } else {
+        match serial.rsplit_once(':') {
+            Some((host, port)) => (host, port),
+            None => return false,
+        }
+    };
+
+    if port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+
+    match host {
+        "localhost" | "::1" => true,
+        _ => match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => ip.is_loopback(),
+            Err(_) => false,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +229,7 @@ mod tests {
         assert!(!is_loopback_serial("127.0.0.1"));
         assert!(!is_loopback_serial("localhost"));
         assert!(!is_loopback_serial("localhost:notaport"));
-        assert!(!is_loopback_serial("127.0.0.1:99999"));
+        assert!(!is_loopback_serial("127.0.0.1:41x"));
         assert!(!is_loopback_serial("127.0.0.1:41377 "));
     }
 }

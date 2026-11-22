@@ -55,11 +55,7 @@ impl FakeAdbServer {
 
     /// Every request frame received so far, including the length prefix.
     pub fn requests(&self) -> Vec<String> {
-        self.state
-            .requests
-            .lock()
-            .expect("request log")
-            .clone()
+        self.state.requests.lock().expect("request log").clone()
     }
 
     /// Answer the next request with `FAIL` and a framed message.
@@ -87,30 +83,16 @@ impl FakeAdbServer {
 
     /// Wait until at least `count` connections have been accepted.
     pub async fn wait_for_connections(&self, count: usize) {
-        wait_until(|| {
-            *self
-                .state
-                .connections
-                .lock()
-                .expect("connection count")
-                >= count
-        })
-        .await
-        .expect("fake ADB accepted the expected connections in time");
+        wait_until(|| *self.state.connections.lock().expect("connection count") >= count)
+            .await
+            .expect("fake ADB accepted the expected connections in time");
     }
 
     /// Wait until at least `count` connections have closed.
     pub async fn wait_for_disconnects(&self, count: usize) {
-        wait_until(|| {
-            *self
-                .state
-                .disconnects
-                .lock()
-                .expect("disconnect count")
-                >= count
-        })
-        .await
-        .expect("fake ADB saw the expected disconnects in time");
+        wait_until(|| *self.state.disconnects.lock().expect("disconnect count") >= count)
+            .await
+            .expect("fake ADB saw the expected disconnects in time");
     }
 
     /// Wait until at least `count` request frames have arrived.
@@ -187,11 +169,7 @@ async fn serve(stream: TcpStream, state: Arc<State>) {
     if write.write_all(&reply).await.is_err() {
         return;
     }
-    state
-        .requests
-        .lock()
-        .expect("request log")
-        .push(request);
+    state.requests.lock().expect("request log").push(request);
     if fail {
         return;
     }

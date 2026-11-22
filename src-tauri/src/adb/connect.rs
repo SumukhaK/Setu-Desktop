@@ -4,9 +4,14 @@
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Serialize;
+use tokio::process::Command;
+
+const DEFAULT_PORT: u16 = 5037;
+const DETAIL_LIMIT: usize = 200;
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -18,20 +23,83 @@ pub enum AdbConnectOutcome {
     Failed { detail: String },
 }
 
-pub fn resolve_adb_path(_env_override: Option<OsString>) -> PathBuf {
-    todo!()
+pub fn resolve_adb_path(env_override: Option<OsString>) -> PathBuf {
+    match env_override {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => PathBuf::from("adb"),
+    }
 }
 
-pub fn resolve_adb_server(_env_port: Option<String>) -> SocketAddr {
-    todo!()
+pub fn resolve_adb_server(env_port: Option<String>) -> SocketAddr {
+    let port = env_port
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT);
+    SocketAddr::from(([127, 0, 0, 1], port))
 }
 
-pub fn parse_connect_output(_stdout: &str, _stderr: &str) -> Result<(), String> {
-    todo!()
+pub fn parse_connect_output(stdout: &str, stderr: &str) -> Result<(), String> {
+    let connected = stdout.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("connected to ") || line.starts_with("already connected to ")
+    });
+    if connected {
+        return Ok(());
+    }
+
+    let detail = stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("adb connect failed");
+    Err(detail.chars().take(DETAIL_LIMIT).collect())
 }
 
-pub async fn adb_connect(_adb: &Path, _addr: &str, _timeout: Duration) -> AdbConnectOutcome {
-    todo!()
+pub async fn adb_connect(adb: &Path, addr: &str, timeout: Duration) -> AdbConnectOutcome {
+    let parsed: SocketAddr = match addr.parse() {
+        Ok(parsed) => parsed,
+        Err(_) => return AdbConnectOutcome::NotLoopback,
+    };
+    if !parsed.ip().is_loopback() {
+        return AdbConnectOutcome::NotLoopback;
+    }
+
+    let child = Command::new(adb)
+        .arg("connect")
+        .arg(addr)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+    let child = match child {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AdbConnectOutcome::Missing;
+        }
+        Err(error) => {
+            return AdbConnectOutcome::Failed {
+                detail: error.to_string(),
+            };
+        }
+    };
+
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            return AdbConnectOutcome::Failed {
+                detail: error.to_string(),
+            };
+        }
+        Err(_) => return AdbConnectOutcome::TimedOut,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match parse_connect_output(&stdout, &stderr) {
+        Ok(()) => AdbConnectOutcome::Connected,
+        Err(detail) => AdbConnectOutcome::Failed { detail },
+    }
 }
 
 #[cfg(test)]

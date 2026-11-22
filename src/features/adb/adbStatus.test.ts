@@ -25,9 +25,7 @@ describe("attachmentOf", () => {
 
   it("maps device, unauthorized and offline directly", () => {
     expect(attachmentOf(addr, up([{ serial: addr, state: "device" }]))).toBe("attached");
-    expect(attachmentOf(addr, up([{ serial: addr, state: "unauthorized" }]))).toBe(
-      "unauthorized",
-    );
+    expect(attachmentOf(addr, up([{ serial: addr, state: "unauthorized" }]))).toBe("unauthorized");
     expect(attachmentOf(addr, up([{ serial: addr, state: "offline" }]))).toBe("offline");
   });
 
@@ -38,9 +36,7 @@ describe("attachmentOf", () => {
   });
 
   it("requires an exact serial match", () => {
-    expect(attachmentOf(addr, up([{ serial: "127.0.0.1:4137", state: "device" }]))).toBe(
-      "absent",
-    );
+    expect(attachmentOf(addr, up([{ serial: "127.0.0.1:4137", state: "device" }]))).toBe("absent");
     expect(attachmentOf(addr, up([{ serial: "127.0.0.1:413770", state: "device" }]))).toBe(
       "absent",
     );
@@ -56,9 +52,7 @@ describe("attachmentLabel", () => {
   it("uses the ticket copy for every attachment", () => {
     expect(attachmentLabel("attached")).toBe("ADB attached");
     expect(attachmentLabel("unauthorized")).toBe("Allow USB debugging on the phone");
-    expect(attachmentLabel("offline")).toBe(
-      "ADB sees the phone offline. Try Connect ADB again.",
-    );
+    expect(attachmentLabel("offline")).toBe("ADB sees the phone offline. Try Connect ADB again.");
     expect(attachmentLabel("absent")).toBe("ADB not attached");
     expect(attachmentLabel("server_down")).toBe("ADB server isn't running");
     expect(attachmentLabel("unknown")).toBe("Checking ADB…");

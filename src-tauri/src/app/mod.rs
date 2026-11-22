@@ -11,9 +11,12 @@ pub mod status;
 mod shell {
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, PoisonError};
+    use std::time::Duration;
 
     use tauri::{Emitter, Manager};
+    use tokio::sync::watch;
 
+    use crate::adb::{self, AdbConnectOutcome, AdbSnapshot, AdbWatcher};
     use crate::app::status::{resolve_daemon_path, resolve_relay, status_of, AppStatus};
     use crate::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
@@ -24,6 +27,8 @@ mod shell {
         supervisor: Option<Supervisor>,
         hub: Option<EventHub>,
         pending: PendingConnect,
+        _adb: AdbWatcher,
+        adb_status: watch::Receiver<AdbSnapshot>,
     }
 
     fn lock_status(state: &AppState) -> MutexGuard<'_, AppStatus> {
@@ -61,6 +66,17 @@ mod shell {
         cancel_pending(&state.pending)
     }
 
+    #[tauri::command]
+    fn adb_status(state: tauri::State<'_, AppState>) -> AdbSnapshot {
+        state.adb_status.borrow().clone()
+    }
+
+    #[tauri::command]
+    async fn adb_connect(adb_addr: String) -> Result<AdbConnectOutcome, String> {
+        let adb = adb::resolve_adb_path(std::env::var_os("SETU_ADB_PATH"));
+        Ok(adb::adb_connect(&adb, &adb_addr, Duration::from_secs(10)).await)
+    }
+
     /// Start the window and, when a relay is configured, the Solo supervisor.
     ///
     /// Dropping the app never stops the daemon (P17); DT-09 adds tray and quit.
@@ -77,7 +93,9 @@ mod shell {
                 daemon_status,
                 session_resync,
                 session_connect_code,
-                session_cancel_connect
+                session_cancel_connect,
+                adb_status,
+                adb_connect
             ])
             .setup(|app| {
                 let relay = resolve_relay(
@@ -128,12 +146,35 @@ mod shell {
                         async move { start_event_hub(receiver, state_dir) },
                     )
                 });
+
+                // The ADB watcher is independent of the relay: it always runs,
+                // and it never starts an ADB server.
+                let server = adb::resolve_adb_server(std::env::var("ANDROID_ADB_SERVER_PORT").ok());
+                let (watcher, adb_status) =
+                    tauri::async_runtime::block_on(async move { adb::start(server) });
+
                 app.manage(AppState {
                     status: Mutex::new(initial),
                     supervisor,
                     hub: hub_pair.as_ref().map(|(hub, _)| hub.clone()),
                     pending: PendingConnect::default(),
+                    _adb: watcher,
+                    adb_status: adb_status.clone(),
                 });
+
+                {
+                    let handle = app.handle().clone();
+                    let mut adb_status = adb_status;
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            let snapshot = adb_status.borrow_and_update().clone();
+                            let _ = handle.emit("adb-status", &snapshot);
+                            if adb_status.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
 
                 if let Some((_, mut messages)) = hub_pair {
                     let handle = app.handle().clone();
