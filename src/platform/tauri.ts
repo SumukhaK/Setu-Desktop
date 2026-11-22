@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { DaemonPort, DaemonStatus } from "../daemon/status";
 import type { AdbConnectOutcome, AdbPort, AdbSnapshot } from "../features/adb/adbStatus";
 import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
+import type { SessionPort, StopOutcome } from "../features/session/sessionPort";
 import type { HubMessage } from "../state/sessionStore";
 import type { SessionHubPort } from "../state/useSessions";
 
@@ -35,6 +36,12 @@ export const tauriSessionHubPort: SessionHubPort = {
     return listen<HubMessage>("session-hub", (event) => {
       onMessage(event.payload);
     });
+  },
+};
+
+export const tauriSessionPort: SessionPort = {
+  stop(sessionId) {
+    return invoke<StopOutcome>("session_stop", { sessionId });
   },
 };
 

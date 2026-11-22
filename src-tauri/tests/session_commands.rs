@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use setu_desktop::commands::session::{stop_session, StopOutcome};
 use setu_desktop::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
 use setu_desktop::rpc::RpcClient;
 use tokio::time::timeout;
@@ -223,4 +224,65 @@ async fn the_code_never_appears_in_an_outcome_only_in_daemon_params() {
     let text = format!("{outcome:?}") + &serde_json::to_string(&outcome).unwrap();
     assert!(!text.contains(CODE), "code leaked into an outcome: {text}");
     assert_eq!(fake.received()[0]["params"]["pairing_code"], CODE);
+}
+
+#[tokio::test]
+async fn stop_sends_exactly_the_session_id_and_returns_stopped() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_with("session.stop", json!({}));
+
+    let outcome = timeout(TEST_TIMEOUT, stop_session(Some(client), "s1"))
+        .await
+        .expect("stop finishes");
+    assert_eq!(outcome, StopOutcome::Stopped);
+
+    let received = fake.received();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0]["method"], "session.stop");
+    assert_eq!(received[0]["params"], json!({ "session_id": "s1" }));
+}
+
+#[tokio::test]
+async fn no_session_maps_to_no_session() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_with_error(
+        "session.stop",
+        json!({ "code": -32020, "message": "no such session" }),
+    );
+    let outcome = timeout(TEST_TIMEOUT, stop_session(Some(client), "s1"))
+        .await
+        .expect("stop finishes");
+    assert_eq!(outcome, StopOutcome::NoSession);
+}
+
+#[tokio::test]
+async fn other_stop_errors_keep_the_numeric_code() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_with_error(
+        "session.stop",
+        json!({ "code": -32603, "message": "internal error" }),
+    );
+    let outcome = timeout(TEST_TIMEOUT, stop_session(Some(client), "s9"))
+        .await
+        .expect("stop finishes");
+    assert_eq!(outcome, StopOutcome::Failed { code: Some(-32603) });
+}
+
+#[tokio::test]
+async fn invalid_session_ids_never_call_the_daemon() {
+    let (fake, client) = connect_fake().await;
+    for id in ["s", "1", "s1;rm", "s1234567890", ""] {
+        assert_eq!(
+            stop_session(Some(client.clone()), id).await,
+            StopOutcome::Invalid,
+            "id {id:?}"
+        );
+    }
+    assert!(fake.received().is_empty());
+}
+
+#[tokio::test]
+async fn stop_without_a_ready_client_is_not_ready() {
+    let outcome = stop_session(None, "s1").await;
+    assert_eq!(outcome, StopOutcome::NotReady);
 }
