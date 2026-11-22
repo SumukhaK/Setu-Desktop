@@ -9,6 +9,7 @@ import { SessionCard } from "./features/session/SessionCard";
 import type { SessionPort } from "./features/session/sessionPort";
 import type { PairPort } from "./features/pair/pairPort";
 import { systemClock } from "./state/clock";
+import type { Clock } from "./state/clock";
 import { useSessions } from "./state/useSessions";
 import type { SessionHubPort } from "./state/useSessions";
 
@@ -24,6 +25,7 @@ export function App({
   adbPort,
   sessionPort,
   clipboard,
+  clock = systemClock,
 }: {
   port: DaemonPort;
   hubPort: SessionHubPort;
@@ -31,10 +33,11 @@ export function App({
   adbPort?: AdbPort;
   sessionPort?: SessionPort;
   clipboard?: { writeText(s: string): Promise<void> };
+  clock?: Clock;
 }) {
   const stopPort = sessionPort ?? noSessionPort;
   const targetClipboard = clipboard ?? noClipboard;
-  const sessions = useSessions(hubPort, systemClock);
+  const sessions = useSessions(hubPort, clock);
   const adb = useAdbStatus(adbPort ?? null);
   const [pairing, setPairing] = useState(false);
   const count = Object.keys(sessions.live).length;
@@ -53,6 +56,7 @@ export function App({
           key={session.sessionId}
           session={session}
           adb={adb}
+          clock={clock}
           adbPort={adbPort ?? null}
           sessionPort={stopPort}
           clipboard={targetClipboard}

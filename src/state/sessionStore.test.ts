@@ -61,13 +61,13 @@ describe("reduce", () => {
     state.live.s1 = {
       ...live("s1"),
       transport: "relay-wss",
-      tunnels: { t1: { state: "up", transport: "relay-wss" } },
+      tunnels: { t1: { state: "up", transport: "relay-wss", at: 0 } },
     };
     const next = reduce(state, snap(2, [info("s1")]), 0);
 
     expect(Object.keys(next.live)).toEqual(["s1"]);
     expect(next.live.s1?.transport).toBe("relay-wss");
-    expect(next.live.s1?.tunnels).toEqual({ t1: { state: "up", transport: "relay-wss" } });
+    expect(next.live.s1?.tunnels).toEqual({ t1: { state: "up", transport: "relay-wss", at: 0 } });
     expect(next.epoch).toBe(2);
   });
 
@@ -91,7 +91,7 @@ describe("reduce", () => {
     state.live.s1 = {
       ...live("s1"),
       transport: "lan",
-      tunnels: { t1: { state: "up", transport: "lan" } },
+      tunnels: { t1: { state: "up", transport: "lan", at: 0 } },
     };
     const next = reduce(
       state,
@@ -101,7 +101,7 @@ describe("reduce", () => {
     expect(next.live.s1?.status).toBe("up");
     expect(next.live.s1?.adbAddr).toBe("127.0.0.1:9");
     expect(next.live.s1?.transport).toBe("lan");
-    expect(next.live.s1?.tunnels).toEqual({ t1: { state: "up", transport: "lan" } });
+    expect(next.live.s1?.tunnels).toEqual({ t1: { state: "up", transport: "lan", at: 0 } });
   });
 
   it("ignores path events for unknown and ended sessions", () => {
@@ -135,21 +135,21 @@ describe("reduce", () => {
     const state = synced([info("s1")]);
     state.live.s1 = {
       ...live("s1"),
-      tunnels: { t1: { state: "lost", reason: "expired" } },
+      tunnels: { t1: { state: "lost", reason: "expired", at: 0 } },
     };
     const stale = reduce(
       state,
       message({ type: "path_up", session: "s1", tunnel_id: "t1", transport: "lan", outage_ms: 1 }),
       0,
     );
-    expect(stale.live.s1?.tunnels.t1).toEqual({ state: "lost", reason: "expired" });
+    expect(stale.live.s1?.tunnels.t1).toEqual({ state: "lost", reason: "expired", at: 0 });
 
     const fresh = reduce(
       stale,
       message({ type: "path_up", session: "s1", tunnel_id: "t2", transport: "lan", outage_ms: 1 }),
       0,
     );
-    expect(fresh.live.s1?.tunnels.t2).toEqual({ state: "up", transport: "lan" });
+    expect(fresh.live.s1?.tunnels.t2).toEqual({ state: "up", transport: "lan", at: 0 });
   });
 
   it("path_up updates the session transport", () => {
@@ -301,6 +301,128 @@ describe("reduce", () => {
     );
     expect(state.live.s1?.transport).toBe("lan");
     expect(state.live.s1?.auditTransport).toBe("relay-tcp");
+  });
+
+  it("path_up stamps at=now and still updates the session transport", () => {
+    const next = reduce(
+      synced([info("s1")]),
+      message({ type: "path_up", session: "s1", tunnel_id: "t1", transport: "lan", outage_ms: 1 }),
+      500,
+    );
+    expect(next.live.s1?.tunnels.t1).toEqual({ state: "up", transport: "lan", at: 500 });
+    expect(next.live.s1?.transport).toBe("lan");
+  });
+
+  it("path_lost stamps at=now", () => {
+    const next = reduce(
+      synced([info("s1")]),
+      message({
+        type: "path_lost",
+        session: "s1",
+        tunnel_id: "t1",
+        reason: "rejoin_window_expired",
+        outage_ms: 91000,
+      }),
+      900,
+    );
+    expect(next.live.s1?.tunnels.t1).toEqual({
+      state: "lost",
+      reason: "rejoin_window_expired",
+      at: 900,
+    });
+  });
+
+  it("a repeated path_down keeps the first since but updates reason and transport", () => {
+    const first = reduce(
+      synced([info("s1")]),
+      message({
+        type: "path_down",
+        session: "s1",
+        tunnel_id: "t1",
+        reason: "keepalive_timeout",
+        transport: "lan",
+      }),
+      100,
+    );
+    const second = reduce(
+      first,
+      message({
+        type: "path_down",
+        session: "s1",
+        tunnel_id: "t1",
+        reason: "reset",
+        transport: "relay-wss",
+      }),
+      400,
+    );
+    expect(second.live.s1?.tunnels.t1).toEqual({
+      state: "down",
+      since: 100,
+      reason: "reset",
+      transport: "relay-wss",
+    });
+  });
+
+  it("a stale path_up after path_lost is ignored", () => {
+    const lost = reduce(
+      synced([info("s1")]),
+      message({
+        type: "path_lost",
+        session: "s1",
+        tunnel_id: "t1",
+        reason: "rejoin_window_expired",
+        outage_ms: 91000,
+      }),
+      900,
+    );
+    const next = reduce(
+      lost,
+      message({ type: "path_up", session: "s1", tunnel_id: "t1", transport: "lan", outage_ms: 1 }),
+      1000,
+    );
+    expect(next.live.s1?.tunnels.t1).toEqual({
+      state: "lost",
+      reason: "rejoin_window_expired",
+      at: 900,
+    });
+    expect(next.live.s1?.transport).toBeNull();
+  });
+
+  it("a path_down for a session that is not live is ignored", () => {
+    const state = synced([info("s1")]);
+    const next = reduce(
+      state,
+      message({
+        type: "path_down",
+        session: "s9",
+        tunnel_id: "t1",
+        reason: "r",
+        transport: "lan",
+      }),
+      1234,
+    );
+    expect(next).toEqual(state);
+  });
+
+  it("a snapshot mid-outage keeps the down tunnel and its first since", () => {
+    const down = reduce(
+      synced([info("s1")]),
+      message({
+        type: "path_down",
+        session: "s1",
+        tunnel_id: "t1",
+        reason: "keepalive_timeout",
+        transport: "relay-wss",
+      }),
+      1000,
+    );
+    const next = reduce(down, snap(2, [info("s1")]), 5000);
+    expect(next.live.s1?.tunnels.t1).toEqual({
+      state: "down",
+      since: 1000,
+      reason: "keepalive_timeout",
+      transport: "relay-wss",
+    });
   });
 
   it("never mutates a frozen input", () => {
