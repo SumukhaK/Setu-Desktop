@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import type { DaemonPort, DaemonStatus } from "./daemon/status";
 import type { AdbPort } from "./features/adb/adbStatus";
 import type { ConnectOutcome, PairPort } from "./features/pair/pairPort";
 import type { SessionPort } from "./features/session/sessionPort";
-import type { HubMessage } from "./state/sessionStore";
+import type { Clock } from "./state/clock";
+import type { HubEvent, HubMessage } from "./state/sessionStore";
 import type { SessionHubPort } from "./state/useSessions";
 
 const daemonPort: DaemonPort = {
@@ -147,5 +148,90 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.queryByRole("article")).toBeNull();
     });
+  });
+});
+
+describe("App rejoin banner and denial (P14)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const endings: HubEvent[] = [
+    {
+      type: "peer_closed",
+      session: "s1",
+      device_id: "pixel-7",
+      peer_reason: "ended_on_device",
+    },
+    {
+      type: "session_expired",
+      session: "s1",
+      device_id: "pixel-7",
+      reason: "max_session_seconds",
+    },
+    { type: "session_down", session: "s1", abnormal: true },
+  ];
+
+  it.each(endings)("a %j removes the card and the holding banner", (ending) => {
+    vi.useFakeTimers();
+    let now = 1000;
+    const clock: Clock = { now: () => now };
+    let push: (message: HubMessage) => void = () => undefined;
+    const hub: SessionHubPort = {
+      subscribe(onMessage) {
+        push = onMessage;
+        return Promise.resolve(() => undefined);
+      },
+      resync() {
+        return Promise.resolve();
+      },
+    };
+    const adbPort: AdbPort = {
+      current: () => Promise.resolve({ server: "down" }),
+      subscribe: () => Promise.resolve(() => undefined),
+      connect: () => Promise.resolve({ outcome: "connected" }),
+    };
+
+    render(<App port={daemonPort} hubPort={hub} adbPort={adbPort} clock={clock} />);
+    act(() => {
+      push({
+        kind: "snapshot",
+        epoch: 1,
+        generation: 1,
+        sessions: [
+          {
+            session_id: "s1",
+            adb_addr: "127.0.0.1:41377",
+            device_id: "pixel-7",
+            started: "t0",
+          },
+        ],
+      });
+    });
+    act(() => {
+      push({
+        kind: "event",
+        epoch: 1,
+        generation: 1,
+        event: {
+          type: "path_down",
+          session: "s1",
+          tunnel_id: "4be1c0d2a9f37e11",
+          reason: "keepalive_timeout",
+          transport: "relay-wss",
+        },
+      });
+    });
+    act(() => {
+      now += 15000;
+      vi.advanceTimersByTime(15000);
+    });
+    expect(screen.getByText(/Phone connection interrupted/)).toBeInTheDocument();
+
+    act(() => {
+      push({ kind: "event", epoch: 1, generation: 1, event: ending });
+    });
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(screen.queryByText(/Phone connection interrupted/)).toBeNull();
   });
 });

@@ -51,9 +51,9 @@ export type HubMessage =
   | { kind: "unavailable"; generation: number };
 
 export type TunnelState =
-  | { state: "up"; transport: string }
+  | { state: "up"; transport: string; at: number }
   | { state: "down"; since: number; reason: string; transport: string }
-  | { state: "lost"; reason: string };
+  | { state: "lost"; reason: string; at: number };
 
 export interface LiveSession {
   sessionId: string;
@@ -225,10 +225,10 @@ function reduceEvent(
       transport: event.transport,
     };
   } else if (event.type === "path_up") {
-    tunnels[event.tunnel_id] = { state: "up", transport: event.transport };
+    tunnels[event.tunnel_id] = { state: "up", transport: event.transport, at: 0 };
     transport = event.transport;
   } else {
-    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason };
+    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason, at: 0 };
   }
   return {
     ...state,

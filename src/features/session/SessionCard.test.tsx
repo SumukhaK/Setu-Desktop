@@ -1,12 +1,14 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { Clock } from "../../state/clock";
 import type { LiveSession } from "../../state/sessionStore";
 import type { AdbPort } from "../adb/adbStatus";
 import { SessionCard } from "./SessionCard";
 import type { SessionPort, StopOutcome } from "./sessionPort";
 
 const ADDR = "127.0.0.1:41377";
+const clock: Clock = { now: () => 0 };
 
 const session = (overrides: Partial<LiveSession> = {}): LiveSession => ({
   sessionId: "s1",
@@ -45,6 +47,7 @@ describe("SessionCard", () => {
       <SessionCard
         session={session()}
         adb={null}
+        clock={clock}
         adbPort={adbPort}
         sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
         clipboard={{ writeText: () => Promise.resolve() }}
@@ -62,6 +65,7 @@ describe("SessionCard", () => {
       <SessionCard
         session={session()}
         adb={null}
+        clock={clock}
         adbPort={adbPort}
         sessionPort={{ stop }}
         clipboard={{ writeText: () => Promise.resolve() }}
@@ -94,6 +98,7 @@ describe("SessionCard", () => {
       <SessionCard
         session={session()}
         adb={null}
+        clock={clock}
         adbPort={adbPort}
         sessionPort={port}
         clipboard={{ writeText: () => Promise.resolve() }}
@@ -110,6 +115,7 @@ describe("SessionCard", () => {
         <SessionCard
           session={session()}
           adb={null}
+          clock={clock}
           adbPort={adbPort}
           sessionPort={port}
           clipboard={{ writeText: () => Promise.resolve() }}
@@ -130,6 +136,7 @@ describe("SessionCard", () => {
       <SessionCard
         session={session()}
         adb={null}
+        clock={clock}
         adbPort={adbPort}
         sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
         clipboard={clipboard}
@@ -146,11 +153,47 @@ describe("SessionCard", () => {
       <SessionCard
         session={session({ adbAddr: null })}
         adb={null}
+        clock={clock}
         adbPort={adbPort}
         sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
         clipboard={{ writeText: () => Promise.resolve() }}
       />,
     );
     expect(screen.queryByRole("button", { name: "Copy address" })).toBeNull();
+  });
+
+  it("a path_up transport switch updates the strip and shows no banner", async () => {
+    const first = session({
+      transport: "relay-wss",
+      tunnels: { t1: { state: "up", transport: "relay-wss", at: 0 } },
+    });
+    const { rerender } = render(
+      <SessionCard
+        session={first}
+        adb={null}
+        clock={clock}
+        adbPort={adbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    expect(await screen.findByText("Transport: Relay (WSS)")).toBeInTheDocument();
+
+    rerender(
+      <SessionCard
+        session={session({
+          transport: "lan",
+          tunnels: { t1: { state: "up", transport: "lan", at: 0 } },
+        })}
+        adb={null}
+        clock={clock}
+        adbPort={adbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    expect(screen.getByText("Transport: LAN (direct)")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
