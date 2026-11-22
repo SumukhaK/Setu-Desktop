@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use setu_desktop::commands::session::{stop_session, StopOutcome};
+use setu_desktop::commands::session::{connect_with_device, stop_session, StopOutcome};
 use setu_desktop::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
 use setu_desktop::rpc::RpcClient;
 use tokio::time::timeout;
@@ -224,6 +224,128 @@ async fn the_code_never_appears_in_an_outcome_only_in_daemon_params() {
     let text = format!("{outcome:?}") + &serde_json::to_string(&outcome).unwrap();
     assert!(!text.contains(CODE), "code leaked into an outcome: {text}");
     assert_eq!(fake.received()[0]["params"]["pairing_code"], CODE);
+}
+
+#[tokio::test]
+async fn device_connect_sends_exact_params_and_returns_connected() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_with("session.connect", session_info());
+    let pending = PendingConnect::default();
+
+    let outcome = timeout(
+        TEST_TIMEOUT,
+        connect_with_device(Some(client), "pixel-7", &pending),
+    )
+    .await
+    .expect("connect finishes");
+    assert_eq!(
+        outcome,
+        ConnectOutcome::Connected {
+            session_id: "s1".into(),
+            device_id: "pixel-7".into(),
+            adb_addr: "127.0.0.1:41377".into(),
+        }
+    );
+    let received = fake.received();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0]["method"], "session.connect");
+    assert_eq!(
+        received[0]["params"],
+        json!({ "device_id": "pixel-7", "timeout_ms": 60000 })
+    );
+}
+
+#[tokio::test]
+async fn device_connect_maps_typed_errors() {
+    let cases = [
+        (-32011, ConnectOutcome::Unavailable),
+        (-32012, ConnectOutcome::NotPaired),
+        (-32014, ConnectOutcome::Revoked),
+    ];
+    for (code, expected) in cases {
+        let (fake, client) = connect_fake().await;
+        fake.reply_with_error(
+            "session.connect",
+            json!({ "code": code, "message": "denied" }),
+        );
+        let pending = PendingConnect::default();
+        let outcome = timeout(
+            TEST_TIMEOUT,
+            connect_with_device(Some(client), "pixel-7", &pending),
+        )
+        .await
+        .expect("connect finishes");
+        assert_eq!(outcome, expected, "code {code}");
+    }
+}
+
+#[tokio::test]
+async fn device_connect_can_be_cancelled_with_the_shared_cancel() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_error_delayed(
+        "session.connect",
+        json!({
+            "code": -32022,
+            "message": "cancelled",
+            "data": { "kind": "cancelled" },
+        }),
+        Duration::from_millis(300),
+    );
+    let pending = Arc::new(PendingConnect::default());
+    let task_pending = Arc::clone(&pending);
+    let task = tokio::spawn(async move {
+        connect_with_device(Some(client.clone()), "pixel-7", &task_pending).await
+    });
+    fake.wait_for_requests(1).await;
+    assert!(cancel_pending(&pending));
+    let outcome = timeout(TEST_TIMEOUT, task)
+        .await
+        .expect("connect finishes")
+        .expect("join");
+    assert_eq!(outcome, ConnectOutcome::Cancelled);
+}
+
+#[tokio::test]
+async fn a_code_connect_and_a_device_connect_share_the_pending_slot() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_delayed(
+        "session.connect",
+        session_info(),
+        Duration::from_millis(300),
+    );
+    let pending = Arc::new(PendingConnect::default());
+    let first_pending = Arc::clone(&pending);
+    let first_client = client.clone();
+    let first =
+        tokio::spawn(
+            async move { connect_with_code(Some(first_client), CODE, &first_pending).await },
+        );
+    fake.wait_for_requests(1).await;
+
+    let second = timeout(
+        TEST_TIMEOUT,
+        connect_with_device(Some(client), "pixel-7", &pending),
+    )
+    .await
+    .expect("second connect finishes");
+    assert_eq!(second, ConnectOutcome::AlreadyPending);
+
+    let first_outcome = timeout(TEST_TIMEOUT, first)
+        .await
+        .expect("first connect finishes")
+        .expect("join");
+    assert!(matches!(first_outcome, ConnectOutcome::Connected { .. }));
+}
+
+#[tokio::test]
+async fn an_invalid_device_id_is_malformed_without_calling_the_daemon() {
+    let (fake, client) = connect_fake().await;
+    let pending = PendingConnect::default();
+    assert_eq!(
+        connect_with_device(Some(client), "", &pending).await,
+        ConnectOutcome::Malformed
+    );
+    assert!(fake.received().is_empty());
 }
 
 #[tokio::test]

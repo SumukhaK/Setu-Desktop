@@ -3,6 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 
 import type { DaemonPort, DaemonStatus } from "../daemon/status";
 import type { AdbConnectOutcome, AdbPort, AdbSnapshot } from "../features/adb/adbStatus";
+import type {
+  DevicesPort,
+  ForgetOutcome,
+  ListOutcome,
+  NicknameOutcome,
+} from "../features/devices/devicesPort";
 import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
 import type { SessionPort, StopOutcome } from "../features/session/sessionPort";
 import type { HubMessage } from "../state/sessionStore";
@@ -36,6 +42,24 @@ export const tauriSessionHubPort: SessionHubPort = {
     return listen<HubMessage>("session-hub", (event) => {
       onMessage(event.payload);
     });
+  },
+};
+
+export const tauriDevicesPort: DevicesPort = {
+  list() {
+    return invoke<ListOutcome>("devices_list");
+  },
+  forget(deviceId) {
+    return invoke<ForgetOutcome>("devices_forget", { deviceId });
+  },
+  setNickname(deviceId, nickname) {
+    return invoke<NicknameOutcome>("device_set_nickname", { deviceId, nickname });
+  },
+  connect(deviceId) {
+    return invoke<ConnectOutcome>("session_connect_device", { deviceId });
+  },
+  cancelConnect() {
+    return invoke<boolean>("session_cancel_connect");
   },
 };
 

@@ -3,6 +3,8 @@ import { useState } from "react";
 import { StatusStrip } from "./daemon/StatusStrip";
 import type { DaemonPort } from "./daemon/status";
 import type { AdbPort } from "./features/adb/adbStatus";
+import { DeviceList } from "./features/devices/DeviceList";
+import type { DevicesPort } from "./features/devices/devicesPort";
 import { useAdbStatus } from "./features/adb/useAdbStatus";
 import { PairDialog } from "./features/pair/PairDialog";
 import { SessionCard } from "./features/session/SessionCard";
@@ -26,6 +28,7 @@ export function App({
   sessionPort,
   clipboard,
   clock = systemClock,
+  devicesPort,
 }: {
   port: DaemonPort;
   hubPort: SessionHubPort;
@@ -34,6 +37,7 @@ export function App({
   sessionPort?: SessionPort;
   clipboard?: { writeText(s: string): Promise<void> };
   clock?: Clock;
+  devicesPort?: DevicesPort;
 }) {
   const stopPort = sessionPort ?? noSessionPort;
   const targetClipboard = clipboard ?? noClipboard;
@@ -62,6 +66,12 @@ export function App({
           clipboard={targetClipboard}
         />
       ))}
+      {devicesPort !== undefined && (
+        <DeviceList
+          port={devicesPort}
+          liveDeviceIds={Object.values(sessions.live).map((session) => session.deviceId)}
+        />
+      )}
       {pairPort !== undefined && (
         <>
           <button
