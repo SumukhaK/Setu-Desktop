@@ -218,17 +218,26 @@ function reduceEvent(
   const tunnels = { ...previous.tunnels };
   let transport = previous.transport;
   if (event.type === "path_down") {
-    tunnels[event.tunnel_id] = {
-      state: "down",
-      since: now,
-      reason: event.reason,
-      transport: event.transport,
-    };
+    const existing = previous.tunnels[event.tunnel_id];
+    tunnels[event.tunnel_id] =
+      existing?.state === "down"
+        ? {
+            state: "down",
+            since: existing.since,
+            reason: event.reason,
+            transport: event.transport,
+          }
+        : {
+            state: "down",
+            since: now,
+            reason: event.reason,
+            transport: event.transport,
+          };
   } else if (event.type === "path_up") {
-    tunnels[event.tunnel_id] = { state: "up", transport: event.transport, at: 0 };
+    tunnels[event.tunnel_id] = { state: "up", transport: event.transport, at: now };
     transport = event.transport;
   } else {
-    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason, at: 0 };
+    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason, at: now };
   }
   return {
     ...state,

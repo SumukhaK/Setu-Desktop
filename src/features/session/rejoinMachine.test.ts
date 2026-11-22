@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { LiveSession, TunnelState } from "../../state/sessionStore";
 import { HOLD_AFTER_MS, nextWakeAt, rejoinViewOf } from "./rejoinMachine";
 
-const session = (tunnels: Record<string, TunnelState>): LiveSession => ({
+const session = (tunnels: Record<string, TunnelState> = {}): LiveSession => ({
   sessionId: "s1",
   deviceId: "pixel-7",
   adbAddr: "127.0.0.1:41377",
@@ -62,7 +62,7 @@ describe("rejoinViewOf (P14)", () => {
     expect(rejoinViewOf(lostNewer, 1000, new Set(["b"]))).toEqual({ kind: "none" });
 
     const dismissedButDown = session({ a: down(100), b: lost(200) });
-    expect(rejoinViewOf(dismissedButDown, 1000, new Set(["b"]))).toEqual({ kind: "holding" });
+    expect(rejoinViewOf(dismissedButDown, 12000, new Set(["b"]))).toEqual({ kind: "holding" });
   });
 });
 
