@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ConnectOutcome } from "../pair/pairPort";
 import { DeviceDetail } from "./DeviceDetail";
-import type { DeviceRow, DevicesPort, NicknameOutcome } from "./devicesPort";
+import type {
+  DeviceRow,
+  DevicesPort,
+  ForgetOutcome,
+  ListOutcome,
+  NicknameOutcome,
+} from "./devicesPort";
 
 const device: DeviceRow = {
   device_id: "pixel-7",
@@ -17,14 +23,21 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   const promise = new Promise<T>((done) => {
     resolve = done;
   });
-  return { promise, resolve: (value) => resolve(value) };
+  return {
+    promise,
+    resolve: (value) => {
+      resolve(value);
+    },
+  };
 }
 
 function fakePort(overrides: Partial<DevicesPort> = {}): DevicesPort {
   return {
-    list: vi.fn(() => Promise.resolve({ outcome: "listed", devices: [] })),
-    forget: vi.fn(() => Promise.resolve({ outcome: "forgotten" })),
-    setNickname: vi.fn(() => Promise.resolve({ outcome: "saved", nickname: null })),
+    list: vi.fn((): Promise<ListOutcome> => Promise.resolve({ outcome: "listed", devices: [] })),
+    forget: vi.fn((): Promise<ForgetOutcome> => Promise.resolve({ outcome: "forgotten" })),
+    setNickname: vi.fn((): Promise<NicknameOutcome> =>
+      Promise.resolve({ outcome: "saved", nickname: null }),
+    ),
     connect: vi.fn(() =>
       Promise.resolve<ConnectOutcome>({
         outcome: "connected",
@@ -141,7 +154,7 @@ describe("DeviceDetail", () => {
   });
 
   it("P17: forget confirms first, says it does not revoke on the phone, and Keep sends nothing", async () => {
-    const forget = vi.fn(() => Promise.resolve({ outcome: "forgotten" }));
+    const forget = vi.fn((): Promise<ForgetOutcome> => Promise.resolve({ outcome: "forgotten" }));
     const onChanged = vi.fn();
     const port = fakePort({ forget });
     render(<DeviceDetail device={device} connected={false} port={port} onChanged={onChanged} />);

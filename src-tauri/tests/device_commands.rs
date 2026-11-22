@@ -107,6 +107,30 @@ async fn an_empty_or_broken_list_maps_to_listed_empty_or_failed() {
 }
 
 #[tokio::test]
+async fn an_unrelated_notification_does_not_disturb_a_delayed_list() {
+    let (fake, client) = connect_fake().await;
+    fake.reply_delayed(
+        "devices.list",
+        json!({ "devices": [] }),
+        Duration::from_millis(10),
+    );
+    fake.notify(
+        "event",
+        json!({ "type": "future_thing", "session": "s1", "fields": {} }),
+    )
+    .await;
+    let dir = tempdir().unwrap();
+    let store = store(&dir);
+
+    assert_eq!(
+        list_devices(Some(client), &store).await,
+        ListOutcome::Listed { devices: vec![] }
+    );
+    fake.wait_for_requests(1).await;
+    fake.close().await;
+}
+
+#[tokio::test]
 async fn p17_forget_with_an_empty_result_sends_the_exact_id_and_drops_the_nickname() {
     let (fake, client) = connect_fake().await;
     fake.reply_with("devices.forget", json!({}));

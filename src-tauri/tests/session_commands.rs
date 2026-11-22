@@ -316,9 +316,10 @@ async fn a_code_connect_and_a_device_connect_share_the_pending_slot() {
     let pending = Arc::new(PendingConnect::default());
     let first_pending = Arc::clone(&pending);
     let first_client = client.clone();
-    let first = tokio::spawn(async move {
-        connect_with_code(Some(first_client), CODE, &first_pending).await
-    });
+    let first =
+        tokio::spawn(
+            async move { connect_with_code(Some(first_client), CODE, &first_pending).await },
+        );
     fake.wait_for_requests(1).await;
 
     let second = timeout(

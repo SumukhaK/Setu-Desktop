@@ -5,6 +5,19 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use serde::{Deserialize, Serialize};
+
+/// Zero-sized error for an invalid nickname. Clippy denies `Result<_, ()>`
+/// under `-D warnings`, so this carries the same meaning without a lint allow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidNickname;
+
+#[derive(Serialize, Deserialize)]
+struct File {
+    version: u32,
+    nicknames: BTreeMap<String, String>,
+}
+
 pub struct NicknameStore {
     path: PathBuf,
     lock: Mutex<()>,
@@ -19,16 +32,58 @@ impl NicknameStore {
     }
 
     pub fn load(&self) -> BTreeMap<String, String> {
-        BTreeMap::new()
+        let Ok(text) = std::fs::read_to_string(&self.path) else {
+            return BTreeMap::new();
+        };
+        let Ok(file) = serde_json::from_str::<File>(&text) else {
+            return BTreeMap::new();
+        };
+        if file.version != 1 {
+            return BTreeMap::new();
+        }
+        file.nicknames
     }
 
-    pub fn set(&self, _device_id: &str, _nickname: Option<&str>) -> io::Result<()> {
+    pub fn set(&self, device_id: &str, nickname: Option<&str>) -> io::Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut nicknames = self.load();
+        match nickname {
+            Some(name) => {
+                nicknames.insert(device_id.to_owned(), name.to_owned());
+            }
+            None => {
+                nicknames.remove(device_id);
+            }
+        }
+        let file = File {
+            version: 1,
+            nicknames,
+        };
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temp = self.path.with_file_name("desktop-nicknames.json.tmp");
+        let mut out = std::fs::File::create(&temp)?;
+        serde_json::to_writer_pretty(&mut out, &file).map_err(io::Error::other)?;
+        out.sync_all()?;
+        drop(out);
+        std::fs::rename(&temp, &self.path)?;
         Ok(())
     }
 }
 
-pub fn normalize_nickname(_raw: &str) -> Result<Option<String>, ()> {
-    Ok(None)
+pub fn normalize_nickname(raw: &str) -> Result<Option<String>, InvalidNickname> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > 40 || trimmed.chars().any(char::is_control) {
+        return Err(InvalidNickname);
+    }
+    Ok(Some(trimmed.to_owned()))
 }
 
 #[cfg(test)]
@@ -83,7 +138,7 @@ mod tests {
         );
         assert_eq!(normalize_nickname(""), Ok(None));
         assert_eq!(normalize_nickname("   "), Ok(None));
-        assert_eq!(normalize_nickname(&"x".repeat(41)), Err(()));
-        assert_eq!(normalize_nickname("a\nb"), Err(()));
+        assert_eq!(normalize_nickname(&"x".repeat(41)), Err(InvalidNickname));
+        assert_eq!(normalize_nickname("a\nb"), Err(InvalidNickname));
     }
 }

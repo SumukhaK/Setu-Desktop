@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::json;
 use tokio::sync::oneshot;
 
+use crate::commands::devices::valid_device_id;
 use crate::events::SessionInfo;
 use crate::rpc::{RpcClient, SetuError};
 
@@ -70,13 +71,14 @@ struct SlotGuard<'a> {
 
 impl Drop for SlotGuard<'_> {
     fn drop(&mut self) {
-        // Stub: the token check arrives with the implementation.
-        let _ = self
+        let mut slot = self
             .pending
             .slot
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.as_ref().is_some_and(|(token, _)| *token == self.token) {
+            let _ = slot.take();
+        }
     }
 }
 
@@ -133,11 +135,43 @@ pub async fn connect_with_code(
 /// Reconnect a pinned device by its exact id, sharing the pending slot with
 /// the pairing-code flow so the two can never run together.
 pub async fn connect_with_device(
-    _client: Option<RpcClient>,
-    _device_id: &str,
-    _pending: &PendingConnect,
+    client: Option<RpcClient>,
+    device_id: &str,
+    pending: &PendingConnect,
 ) -> ConnectOutcome {
-    ConnectOutcome::NotReady
+    if !valid_device_id(device_id) {
+        return ConnectOutcome::Malformed;
+    }
+    let Some(client) = client else {
+        return ConnectOutcome::NotReady;
+    };
+    let Some((cancel_rx, token)) = claim_slot(pending) else {
+        return ConnectOutcome::AlreadyPending;
+    };
+    let _guard = SlotGuard { pending, token };
+
+    let result = client
+        .call_cancellable(
+            "session.connect",
+            Some(json!({ "device_id": device_id, "timeout_ms": 60000 })),
+            cancel_rx,
+        )
+        .await;
+    match result {
+        Ok(value) => match serde_json::from_value::<SessionInfo>(value) {
+            Ok(info) => ConnectOutcome::Connected {
+                session_id: info.session_id,
+                device_id: info.device_id,
+                adb_addr: info.adb_addr,
+            },
+            Err(_) => ConnectOutcome::Failed { code: None },
+        },
+        Err(SetuError::NotPaired) => ConnectOutcome::NotPaired,
+        Err(SetuError::Revoked) => ConnectOutcome::Revoked,
+        Err(SetuError::Unavailable) => ConnectOutcome::Unavailable,
+        Err(SetuError::Cancelled) => ConnectOutcome::Cancelled,
+        Err(error) => ConnectOutcome::Failed { code: error.code() },
+    }
 }
 
 #[derive(Clone, Serialize, PartialEq, Debug)]

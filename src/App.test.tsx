@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import type { DaemonPort, DaemonStatus } from "./daemon/status";
-import type { DevicesPort } from "./features/devices/devicesPort";
+import type {
+  DevicesPort,
+  ForgetOutcome,
+  ListOutcome,
+  NicknameOutcome,
+} from "./features/devices/devicesPort";
 import type { AdbPort } from "./features/adb/adbStatus";
 import type { ConnectOutcome, PairPort } from "./features/pair/pairPort";
 import type { SessionPort } from "./features/session/sessionPort";
@@ -240,10 +245,12 @@ describe("App rejoin banner and denial (P14)", () => {
 describe("App saved devices", () => {
   it("renders the Saved devices section only when a devices port is given", async () => {
     const devicesPort: DevicesPort = {
-      list: vi.fn(() => Promise.resolve({ outcome: "listed", devices: [] })),
-      forget: vi.fn(() => Promise.resolve({ outcome: "forgotten" })),
-      setNickname: vi.fn(() => Promise.resolve({ outcome: "saved", nickname: null })),
-      connect: vi.fn(() =>
+      list: vi.fn((): Promise<ListOutcome> => Promise.resolve({ outcome: "listed", devices: [] })),
+      forget: vi.fn((): Promise<ForgetOutcome> => Promise.resolve({ outcome: "forgotten" })),
+      setNickname: vi.fn((): Promise<NicknameOutcome> =>
+        Promise.resolve({ outcome: "saved", nickname: null }),
+      ),
+      connect: vi.fn((): Promise<ConnectOutcome> =>
         Promise.resolve({
           outcome: "connected",
           session_id: "s1",

@@ -16,7 +16,12 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   const promise = new Promise<T>((done) => {
     resolve = done;
   });
-  return { promise, resolve: (value) => resolve(value) };
+  return {
+    promise,
+    resolve: (value) => {
+      resolve(value);
+    },
+  };
 }
 
 const row = (id: string, nickname: string | null = null): DeviceRow => ({
@@ -50,11 +55,11 @@ function fakePort(list: () => Promise<ListOutcome>): DevicesPort {
 }
 
 describe("DeviceList", () => {
-  it("shows the empty copy only after the first list resolves", async () => {
+  it("shows the empty copy while loading and after an empty list resolves", async () => {
     const pending = deferred<ListOutcome>();
     const port = fakePort(() => pending.promise);
     render(<DeviceList port={port} liveDeviceIds={[]} />);
-    expect(screen.queryByText("No saved devices yet. Pair a phone to add it.")).toBeNull();
+    expect(screen.getByText("No saved devices yet. Pair a phone to add it.")).toBeInTheDocument();
 
     await act(async () => {
       pending.resolve(listed([]));

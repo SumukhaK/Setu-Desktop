@@ -5,6 +5,7 @@ import { App } from "./App";
 import {
   tauriAdbPort,
   tauriDaemonPort,
+  tauriDevicesPort,
   tauriPairPort,
   tauriSessionHubPort,
   tauriSessionPort,
@@ -24,6 +25,7 @@ createRoot(root).render(
       adbPort={tauriAdbPort}
       sessionPort={tauriSessionPort}
       clipboard={navigator.clipboard}
+      devicesPort={tauriDevicesPort}
     />
   </StrictMode>,
 );
