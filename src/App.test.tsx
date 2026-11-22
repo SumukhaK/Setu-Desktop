@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import type { DaemonPort, DaemonStatus } from "./daemon/status";
+import type { AdbPort } from "./features/adb/adbStatus";
 import type { ConnectOutcome, PairPort } from "./features/pair/pairPort";
+import type { HubMessage } from "./state/sessionStore";
 import type { SessionHubPort } from "./state/useSessions";
 
 const daemonPort: DaemonPort = {
@@ -36,5 +38,51 @@ describe("App", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the live session line when ADB is down", async () => {
+    let push: (message: HubMessage) => void = () => undefined;
+    const hub: SessionHubPort = {
+      subscribe(onMessage) {
+        push = onMessage;
+        return Promise.resolve(() => undefined);
+      },
+      resync() {
+        return Promise.resolve();
+      },
+    };
+    const adbPort: AdbPort = {
+      current() {
+        return Promise.resolve({ server: "down" });
+      },
+      subscribe() {
+        return Promise.resolve(() => undefined);
+      },
+      connect() {
+        return Promise.resolve({ outcome: "connected" });
+      },
+    };
+
+    render(<App port={daemonPort} hubPort={hub} adbPort={adbPort} />);
+    act(() => {
+      push({
+        kind: "snapshot",
+        epoch: 1,
+        generation: 1,
+        sessions: [
+          {
+            session_id: "s1",
+            adb_addr: "127.0.0.1:41377",
+            device_id: "pixel-7",
+            started: "t0",
+          },
+        ],
+      });
+    });
+
+    expect(await screen.findByText("1 live session")).toBeInTheDocument();
+    expect(
+      await screen.findByText("127.0.0.1:41377 · ADB server isn't running"),
+    ).toBeInTheDocument();
   });
 });
