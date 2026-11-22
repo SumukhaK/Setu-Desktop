@@ -21,6 +21,19 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+## Real-daemon smoke test
+
+`src-tauri/tests/e2e_real_daemon.rs` drives the Rust core against a real Setu-SDK v1.1.0 relay, phone agent and daemon. It reports a skip unless `SETU_E2E_BIN_DIR` is set, so the ordinary `cargo test` run stays fast. To run it locally, build the SDK binaries from the `v1.1.0` tag and point the test at them:
+
+```sh
+git clone --branch v1.1.0 --depth 1 https://github.com/SumukhaK/Setu.git ../Setu
+cd ../Setu/core && go build -o "$HOME/setu-bin" ./cmd/setu ./cmd/setu-daemon
+cd -
+cd src-tauri && SETU_E2E_BIN_DIR="$HOME/setu-bin" cargo test --test e2e_real_daemon -- --nocapture
+```
+
+The test starts a loopback relay and phone agent, pairs by code, echoes a 24-byte ADB header through the tunnel, restarts the relay after a four-second outage, and checks stop, nickname, connect-by-id and forget. The same run is part of CI in `.github/workflows/ci.yml`.
+
 Work is tracked ticket by ticket in [docs/TDD_TICKETS.md](docs/TDD_TICKETS.md). Builders start from [docs/prompts/CURRENT_TASK.md](docs/prompts/CURRENT_TASK.md).
 
 <details>
