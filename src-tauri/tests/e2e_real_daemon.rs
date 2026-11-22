@@ -79,7 +79,7 @@ fn start_relay(bin_dir: &Path, port: u16, state: &Path) -> ChildGuard {
     let child = Command::new(bin_dir.join("setu"))
         .args(args)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("start setu relay");
     ChildGuard(child)
@@ -105,7 +105,7 @@ fn start_device(
     let mut child = Command::new(bin_dir.join("setu"))
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("start setu device agent");
     let stdout = child.stdout.take().expect("agent stdout");
@@ -113,6 +113,7 @@ fn start_device(
 
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            println!("agent: {line}");
             let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
@@ -254,6 +255,7 @@ async fn run(bin_dir: PathBuf) {
     )
     .await
     .expect("pairing finishes");
+    println!("pairing outcome: {outcome:?}");
     let (session_id, addr) = match outcome {
         ConnectOutcome::Connected {
             session_id,
