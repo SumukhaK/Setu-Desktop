@@ -15,6 +15,7 @@ const session: LiveSession = {
   started: "t0",
   status: "up",
   transport: null,
+  auditTransport: null,
   tunnels: {},
 };
 

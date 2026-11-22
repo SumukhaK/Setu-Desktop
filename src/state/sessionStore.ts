@@ -112,7 +112,7 @@ export function reduce(
           started: session.started,
           status: "up",
           transport: previous?.transport ?? null,
-          auditTransport: null,
+          auditTransport: previous?.auditTransport ?? null,
           tunnels: previous?.tunnels ?? {},
         };
         return [session.session_id, next];
@@ -151,7 +151,7 @@ function reduceEvent(
       started: previous?.started ?? null,
       status: event.type === "listening" ? "listening" : "up",
       transport: previous?.transport ?? null,
-      auditTransport: null,
+      auditTransport: previous?.auditTransport ?? null,
       tunnels: previous?.tunnels ?? {},
     };
     return { ...state, live: { ...state.live, [event.session]: next } };
@@ -189,6 +189,26 @@ function reduceEvent(
       Object.entries(state.live).filter(([sessionId]) => sessionId !== event.session),
     );
     return { ...state, live, ended: [ended, ...state.ended].slice(0, MAX_ENDED) };
+  }
+
+  if (event.type === "audit_session_start") {
+    const matches = Object.values(state.live).filter(
+      (candidate) => candidate.deviceId === event.device_id,
+    );
+    if (matches.length !== 1) {
+      return state;
+    }
+    const target = matches[0];
+    if (target === undefined) {
+      return state;
+    }
+    return {
+      ...state,
+      live: {
+        ...state.live,
+        [target.sessionId]: { ...target, auditTransport: event.transport },
+      },
+    };
   }
 
   const previous = state.live[event.session];

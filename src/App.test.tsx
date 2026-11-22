@@ -144,6 +144,8 @@ describe("App", () => {
         event: { type: "session_down", session: "s1", abnormal: false },
       });
     });
-    await waitFor(() => expect(screen.queryByRole("article")).toBeNull());
+    await waitFor(() => {
+      expect(screen.queryByRole("article")).toBeNull();
+    });
   });
 });

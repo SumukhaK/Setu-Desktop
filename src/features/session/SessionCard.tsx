@@ -1,13 +1,81 @@
-import type { LiveSession } from "../../state/sessionStore";
-import type { AdbPort, AdbSnapshot } from "../adb/adbStatus";
-import type { SessionPort } from "./sessionPort";
+import { useState } from "react";
 
-export function SessionCard(_props: {
+import type { LiveSession } from "../../state/sessionStore";
+import { SessionAdbLine } from "../adb/SessionAdbLine";
+import type { AdbPort, AdbSnapshot } from "../adb/adbStatus";
+import { StatusStrip } from "./StatusStrip";
+import { stopMessage } from "./sessionPort";
+import type { SessionPort, StopOutcome } from "./sessionPort";
+
+export function SessionCard({
+  session,
+  adb,
+  adbPort,
+  sessionPort,
+  clipboard,
+}: {
   session: LiveSession;
   adb: AdbSnapshot | null;
   adbPort: AdbPort | null;
   sessionPort: SessionPort;
   clipboard: { writeText(s: string): Promise<void> };
 }) {
-  return <article />;
+  const [pending, setPending] = useState(false);
+  const [outcome, setOutcome] = useState<StopOutcome | null>(null);
+  const [copied, setCopied] = useState(false);
+  const headingId = `session-${session.sessionId}`;
+  const message = outcome === null ? null : stopMessage(outcome);
+
+  async function disconnect() {
+    setPending(true);
+    setOutcome(null);
+    try {
+      setOutcome(await sessionPort.stop(session.sessionId));
+    } catch {
+      // Keep the last state; the session list is the source of truth.
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function copyAddress() {
+    if (session.adbAddr === null) {
+      return;
+    }
+    try {
+      await clipboard.writeText(session.adbAddr);
+      setCopied(true);
+    } catch {
+      // A failed copy leaves the previous state unchanged.
+    }
+  }
+
+  return (
+    <article aria-labelledby={headingId}>
+      <h2 id={headingId}>{session.deviceId}</h2>
+      <StatusStrip session={session} adb={adb} />
+      <SessionAdbLine session={session} adb={adb} port={adbPort} />
+      {session.adbAddr !== null && (
+        <button
+          type="button"
+          onClick={() => {
+            void copyAddress();
+          }}
+        >
+          Copy address
+        </button>
+      )}
+      {copied && <p>Copied</p>}
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => {
+          void disconnect();
+        }}
+      >
+        Disconnect
+      </button>
+      {message !== null && <p role="alert">{message}</p>}
+    </article>
+  );
 }

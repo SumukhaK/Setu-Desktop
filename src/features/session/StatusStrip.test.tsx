@@ -24,10 +24,10 @@ const up = (state: string): AdbSnapshot => ({
   devices: [{ serial: ADDR, state }],
 });
 
-function facts(): string[] {
+function facts(): (string | null)[] {
   return within(screen.getByRole("list", { name: "Session status" }))
     .getAllByRole("listitem")
-    .map((item) => item.textContent ?? "");
+    .map((item) => item.textContent);
 }
 
 describe("StatusStrip", () => {
@@ -50,7 +50,7 @@ describe("StatusStrip", () => {
     expect(facts()).toContain(expected);
   });
 
-  const snapshots: [AdbSnapshot, string][] = [
+  const snapshots: [AdbSnapshot | null, string][] = [
     [{ server: "up", devices: [] }, "Local ADB: not attached"],
     [{ server: "down" }, "Local ADB: server down"],
     [{ server: "unknown" }, "Local ADB: checking"],

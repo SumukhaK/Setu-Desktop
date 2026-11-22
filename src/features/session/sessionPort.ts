@@ -9,6 +9,18 @@ export interface SessionPort {
   stop(sessionId: string): Promise<StopOutcome>;
 }
 
-export function stopMessage(_outcome: StopOutcome): string | null {
-  return null;
+export function stopMessage(outcome: StopOutcome): string | null {
+  switch (outcome.outcome) {
+    case "stopped":
+    case "no_session":
+      return null;
+    case "not_ready":
+      return "The Setu service isn't ready yet. Try again in a moment.";
+    case "invalid":
+      return "This session can't be stopped from here.";
+    case "failed":
+      return outcome.code === null
+        ? "Couldn't disconnect. Try again."
+        : `Couldn't disconnect (error ${String(outcome.code)}). Try again.`;
+  }
 }

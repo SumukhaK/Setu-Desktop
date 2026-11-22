@@ -126,8 +126,27 @@ pub enum StopOutcome {
 
 /// Stop one client session by its `s<n>` id. Rust owns the id validation and
 /// the `session.stop` call; the UI only gets a typed outcome.
-pub async fn stop_session(_client: Option<RpcClient>, _session_id: &str) -> StopOutcome {
-    StopOutcome::NotReady
+pub async fn stop_session(client: Option<RpcClient>, session_id: &str) -> StopOutcome {
+    let bytes = session_id.as_bytes();
+    if bytes.first() != Some(&b's')
+        || bytes.len() < 2
+        || bytes.len() > 10
+        || !bytes[1..].iter().all(u8::is_ascii_digit)
+    {
+        return StopOutcome::Invalid;
+    }
+    let Some(client) = client else {
+        return StopOutcome::NotReady;
+    };
+
+    match client
+        .call("session.stop", Some(json!({ "session_id": session_id })))
+        .await
+    {
+        Ok(_) => StopOutcome::Stopped,
+        Err(SetuError::NoSession) => StopOutcome::NoSession,
+        Err(error) => StopOutcome::Failed { code: error.code() },
+    }
 }
 
 pub fn cancel_pending(pending: &PendingConnect) -> bool {

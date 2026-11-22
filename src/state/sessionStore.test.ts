@@ -286,14 +286,17 @@ describe("reduce", () => {
 
     state = reduce(
       state,
-      message({ type: "session_up", session: "s1", addr: "127.0.0.1:9", device_id: "pixel-7" }),
+      message({ type: "session_up", session: "s1", addr: "127.0.0.1:9", device_id: "pixel-7" }, 2),
       0,
     );
     expect(state.live.s1?.auditTransport).toBe("relay-tcp");
 
     state = reduce(
       state,
-      message({ type: "path_up", session: "s1", tunnel_id: "t1", transport: "lan", outage_ms: 1 }),
+      message(
+        { type: "path_up", session: "s1", tunnel_id: "t1", transport: "lan", outage_ms: 1 },
+        2,
+      ),
       0,
     );
     expect(state.live.s1?.transport).toBe("lan");

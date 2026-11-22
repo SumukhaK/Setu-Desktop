@@ -31,7 +31,12 @@ function deferred(): { outcome: Promise<StopOutcome>; resolve: (value: StopOutco
   const outcome = new Promise<StopOutcome>((done) => {
     resolve = done;
   });
-  return { outcome, resolve: (value) => resolve(value) };
+  return {
+    outcome,
+    resolve: (value) => {
+      resolve(value);
+    },
+  };
 }
 
 describe("SessionCard", () => {
@@ -71,23 +76,19 @@ describe("SessionCard", () => {
 
     await act(async () => {
       pending.resolve({ outcome: "stopped" });
+      await Promise.resolve();
     });
     expect(button).not.toBeDisabled();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it.each([
-    [
-      { outcome: "not_ready" } as StopOutcome,
-      "The Setu service isn't ready yet. Try again in a moment.",
-    ],
-    [{ outcome: "invalid" } as StopOutcome, "This session can't be stopped from here."],
-    [
-      { outcome: "failed", code: -32603 } as StopOutcome,
-      "Couldn't disconnect (error -32603). Try again.",
-    ],
-    [{ outcome: "failed", code: null } as StopOutcome, "Couldn't disconnect. Try again."],
-  ])("shows the exact copy for %j", async (outcome, copy) => {
+  const outcomes: [StopOutcome, string][] = [
+    [{ outcome: "not_ready" }, "The Setu service isn't ready yet. Try again in a moment."],
+    [{ outcome: "invalid" }, "This session can't be stopped from here."],
+    [{ outcome: "failed", code: -32603 }, "Couldn't disconnect (error -32603). Try again."],
+    [{ outcome: "failed", code: null }, "Couldn't disconnect. Try again."],
+  ];
+  it.each(outcomes)("shows the exact copy for %j", async (outcome, copy) => {
     const port: SessionPort = { stop: () => Promise.resolve(outcome) };
     render(
       <SessionCard
