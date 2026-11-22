@@ -55,6 +55,11 @@ pub enum HubEvent {
         device_id: String,
         peer_reason: String,
     },
+    AuditSessionStart {
+        device_id: String,
+        tunnel_id: String,
+        transport: String,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -328,6 +333,111 @@ mod tests {
         ];
         for (notification, expected) in cases {
             assert_eq!(parse_notification(&notification), Parsed::Event(expected));
+        }
+    }
+
+    fn audit(fields: Value) -> Notification {
+        // The daemon sends audit events with an empty `session` field.
+        event("audit", "", fields)
+    }
+
+    fn session_start() -> Value {
+        json!({
+            "event": "session_start",
+            "role": "desktop",
+            "device": "pixel-7",
+            "session": "4be1c0d2a9f37e11",
+            "transport": "relay-wss",
+            "user": "alice",
+            "token_id": "t-123",
+        })
+    }
+
+    #[test]
+    fn an_audit_session_start_crosses_with_exactly_three_fields() {
+        let parsed = parse_notification(&audit(session_start()));
+        let expected = HubEvent::AuditSessionStart {
+            device_id: "pixel-7".into(),
+            tunnel_id: "4be1c0d2a9f37e11".into(),
+            transport: "relay-wss".into(),
+        };
+        assert_eq!(parsed, Parsed::Event(expected.clone()));
+
+        let value = serde_json::to_value(&expected).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["device_id", "tunnel_id", "transport", "type"]);
+        let text = serde_json::to_string(&expected).unwrap();
+        assert!(!text.contains("alice"), "user leaked: {text}");
+        assert!(!text.contains("t-123"), "token_id leaked: {text}");
+    }
+
+    #[test]
+    fn every_other_audit_record_is_ignored() {
+        for fields in [
+            json!({ "event": "adb_op", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e11", "transport": "lan" }),
+            json!({ "event": "session_end", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e11", "transport": "lan" }),
+            json!({ "event": "token_rotated", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e11", "transport": "lan" }),
+        ] {
+            assert_eq!(parse_notification(&audit(fields)), Parsed::Ignored);
+        }
+
+        let mut wrong_role = session_start();
+        wrong_role["role"] = json!("relay");
+        assert_eq!(parse_notification(&audit(wrong_role)), Parsed::Ignored);
+
+        let mut wrong_event = session_start();
+        wrong_event["event"] = json!("session_started");
+        assert_eq!(parse_notification(&audit(wrong_event)), Parsed::Ignored);
+    }
+
+    #[test]
+    fn malformed_audit_session_starts_are_ignored() {
+        let cases = [
+            (
+                "bad transport",
+                json!({ "event": "session_start", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e11", "transport": "bluetooth" }),
+            ),
+            (
+                "missing device",
+                json!({ "event": "session_start", "role": "desktop", "session": "4be1c0d2a9f37e11", "transport": "lan" }),
+            ),
+            (
+                "empty device",
+                json!({ "event": "session_start", "role": "desktop", "device": "", "session": "4be1c0d2a9f37e11", "transport": "lan" }),
+            ),
+            (
+                "short tunnel",
+                json!({ "event": "session_start", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e", "transport": "lan" }),
+            ),
+            (
+                "long tunnel",
+                json!({ "event": "session_start", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e111", "transport": "lan" }),
+            ),
+            (
+                "uppercase tunnel",
+                json!({ "event": "session_start", "role": "desktop", "device": "pixel-7", "session": "4BE1C0D2A9F37E11", "transport": "lan" }),
+            ),
+            (
+                "non-hex tunnel",
+                json!({ "event": "session_start", "role": "desktop", "device": "pixel-7", "session": "4be1c0d2a9f37e1g", "transport": "lan" }),
+            ),
+            (
+                "wrong role",
+                json!({ "event": "session_start", "role": "device", "device": "pixel-7", "session": "4be1c0d2a9f37e11", "transport": "lan" }),
+            ),
+        ];
+        for (label, fields) in cases {
+            assert_eq!(
+                parse_notification(&audit(fields)),
+                Parsed::Ignored,
+                "{label}"
+            );
         }
     }
 

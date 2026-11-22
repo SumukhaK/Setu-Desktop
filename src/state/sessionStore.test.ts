@@ -38,6 +38,7 @@ const live = (id: string): LiveSession => ({
   started: "t0",
   status: "up",
   transport: null,
+  auditTransport: null,
   tunnels: {},
 });
 
@@ -241,6 +242,62 @@ describe("reduce", () => {
     expect(next.ended).toEqual(ended);
     expect(next.epoch).toBe(3);
     expect(next.generation).toBe(1);
+  });
+
+  const audit = (deviceId: string, transport: string, epoch = 1): HubMessage =>
+    message(
+      {
+        type: "audit_session_start",
+        device_id: deviceId,
+        tunnel_id: "4be1c0d2a9f37e11",
+        transport,
+      },
+      epoch,
+    );
+
+  it("an audit session_start sets auditTransport only for a unique device match", () => {
+    const state = synced([info("s1"), info("s2")]);
+    state.live.s2 = { ...live("s2"), deviceId: "pixel-8" };
+
+    const next = reduce(state, audit("pixel-7", "lan"), 0);
+    expect(next.live.s1?.auditTransport).toBe("lan");
+    expect(next.live.s2?.auditTransport).toBeNull();
+  });
+
+  it("two sessions on one device or no match leave the state unchanged", () => {
+    const two = synced([info("s1"), info("s2")]);
+    expect(reduce(two, audit("pixel-7", "lan"), 0)).toEqual(two);
+
+    const none = synced([info("s1")]);
+    expect(reduce(none, audit("pixel-9", "lan"), 0)).toEqual(none);
+  });
+
+  it("an old-epoch audit event is ignored", () => {
+    const state = synced([info("s1")], 2);
+    expect(reduce(state, audit("pixel-7", "lan", 1), 0)).toEqual(state);
+  });
+
+  it("auditTransport survives a snapshot and a session_up but path_up still wins", () => {
+    let state = reduce(synced([info("s1")]), audit("pixel-7", "relay-tcp"), 0);
+    expect(state.live.s1?.auditTransport).toBe("relay-tcp");
+
+    state = reduce(state, snap(2, [info("s1")]), 0);
+    expect(state.live.s1?.auditTransport).toBe("relay-tcp");
+
+    state = reduce(
+      state,
+      message({ type: "session_up", session: "s1", addr: "127.0.0.1:9", device_id: "pixel-7" }),
+      0,
+    );
+    expect(state.live.s1?.auditTransport).toBe("relay-tcp");
+
+    state = reduce(
+      state,
+      message({ type: "path_up", session: "s1", tunnel_id: "t1", transport: "lan", outage_ms: 1 }),
+      0,
+    );
+    expect(state.live.s1?.transport).toBe("lan");
+    expect(state.live.s1?.auditTransport).toBe("relay-tcp");
   });
 
   it("never mutates a frozen input", () => {

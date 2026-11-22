@@ -32,7 +32,13 @@ export type HubEvent =
       outage_ms: number;
     }
   | { type: "session_expired"; session: string; device_id: string; reason: string }
-  | { type: "peer_closed"; session: string; device_id: string; peer_reason: string };
+  | { type: "peer_closed"; session: string; device_id: string; peer_reason: string }
+  | {
+      type: "audit_session_start";
+      device_id: string;
+      tunnel_id: string;
+      transport: string;
+    };
 
 export type HubMessage =
   | {
@@ -56,6 +62,7 @@ export interface LiveSession {
   started: string | null;
   status: "listening" | "up" | "retrying";
   transport: string | null;
+  auditTransport: string | null;
   tunnels: Record<string, TunnelState>;
 }
 
@@ -105,6 +112,7 @@ export function reduce(
           started: session.started,
           status: "up",
           transport: previous?.transport ?? null,
+          auditTransport: null,
           tunnels: previous?.tunnels ?? {},
         };
         return [session.session_id, next];
@@ -143,6 +151,7 @@ function reduceEvent(
       started: previous?.started ?? null,
       status: event.type === "listening" ? "listening" : "up",
       transport: previous?.transport ?? null,
+      auditTransport: null,
       tunnels: previous?.tunnels ?? {},
     };
     return { ...state, live: { ...state.live, [event.session]: next } };

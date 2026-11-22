@@ -114,6 +114,22 @@ pub async fn connect_with_code(
     }
 }
 
+#[derive(Clone, Serialize, PartialEq, Debug)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum StopOutcome {
+    Stopped,
+    NoSession,
+    NotReady,
+    Invalid,
+    Failed { code: Option<i64> },
+}
+
+/// Stop one client session by its `s<n>` id. Rust owns the id validation and
+/// the `session.stop` call; the UI only gets a typed outcome.
+pub async fn stop_session(_client: Option<RpcClient>, _session_id: &str) -> StopOutcome {
+    StopOutcome::NotReady
+}
+
 pub fn cancel_pending(pending: &PendingConnect) -> bool {
     let sender = pending
         .0
@@ -164,6 +180,23 @@ mod tests {
             serde_json::to_value(ConnectOutcome::BadCode).unwrap()["outcome"],
             "bad_code"
         );
+    }
+
+    #[test]
+    fn stop_outcome_json_uses_the_bridge_tags() {
+        let stopped = serde_json::to_value(StopOutcome::Stopped).unwrap();
+        assert_eq!(stopped["outcome"], "stopped");
+        assert_eq!(
+            serde_json::to_value(StopOutcome::NoSession).unwrap()["outcome"],
+            "no_session"
+        );
+        assert_eq!(
+            serde_json::to_value(StopOutcome::Invalid).unwrap()["outcome"],
+            "invalid"
+        );
+        let failed = serde_json::to_value(StopOutcome::Failed { code: Some(-32603) }).unwrap();
+        assert_eq!(failed["outcome"], "failed");
+        assert_eq!(failed["code"], -32603);
     }
 
     #[test]
