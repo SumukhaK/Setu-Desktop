@@ -56,12 +56,12 @@ fn start_echo() -> (SocketAddr, std::sync::mpsc::Sender<()>) {
             let Ok(mut stream) = stream else {
                 break;
             };
-            loop {
+            std::thread::spawn(move || loop {
                 let mut frame = [0u8; 24];
                 if stream.read_exact(&mut frame).is_err() || stream.write_all(&frame).is_err() {
                     break;
                 }
-            }
+            });
         }
     });
 
@@ -254,18 +254,17 @@ async fn run(bin_dir: PathBuf) {
     )
     .await
     .expect("pairing finishes");
-    let session_id = match outcome {
+    let (session_id, addr) = match outcome {
         ConnectOutcome::Connected {
             session_id,
             adb_addr,
             ..
         } => {
-            assert!(adb_addr
+            let addr = adb_addr
                 .parse::<SocketAddr>()
-                .expect("loopback address")
-                .ip()
-                .is_loopback());
-            session_id
+                .expect("a loopback ADB endpoint");
+            assert!(addr.ip().is_loopback());
+            (session_id, addr)
         }
         other => panic!("expected Connected, got {other:?}"),
     };
@@ -293,24 +292,6 @@ async fn run(bin_dir: PathBuf) {
     .await
     .expect("Listening and SessionUp for the paired session");
 
-    let addr = match timeout(
-        STEP,
-        ready_client(&supervisor)
-            .expect("a ready client")
-            .call("session.list", None),
-    )
-    .await
-    .expect("session.list finishes")
-    {
-        Ok(value) => {
-            let info: setu_desktop::events::SessionInfo =
-                serde_json::from_value(value).expect("a session row");
-            info.adb_addr
-                .parse::<SocketAddr>()
-                .expect("loopback endpoint")
-        }
-        Err(error) => panic!("session.list failed: {error:?}"),
-    };
     roundtrip(addr).await;
 
     // The relay disappears for four seconds, then returns on the same port.
