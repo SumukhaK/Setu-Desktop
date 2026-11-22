@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-22 · main @ `8076c86` (DT-08 merged, UK-01 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-22 · main @ `59aece4` (UK-01 merged, UK-02 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-22 · main @ `8076c86` (DT-08 merged, UK-01 prompt issued)
 - Active builder prompt: `docs/prompts/CURRENT_TASK.md`. Review fixes: `docs/REVIEW_FIX_PROMPT.md` (exists only while a PR needs changes).
 - Acceptance tests: `docs/JOURNEYS.md` P01–P22 (canonical for both repos). Screens: `docs/SCREENS.md` D01–D10.
 - SDK contract: https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md (§2 daemon JSON-RPC, §2.3 error table, §1.5 events). Daemon source: `core/internal/daemon/cmd.go` (flags, ready line, token file).
-- The reviewer runs the Rust gates in Claude's cloud session; there is no CI yet.
+- CI (`.github/workflows/ci.yml`, UK-01): gates-linux, gates-windows (MSVC, LF checkout) and e2e-linux (builds `setu` + `setu-daemon` from SDK tag v1.1.0, runs `tests/e2e_real_daemon.rs` with `SETU_E2E_BIN_DIR`). All three must be green before merge.
 
 ## Stack (fixed in TDD_TICKETS.md §4)
 
@@ -51,6 +51,7 @@ src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (
   src/store/nicknames.rs               NicknameStore (AD-14), normalize_nickname → InvalidNickname
   src/commands/devices.rs              DeviceRow, List/Forget/NicknameOutcome, valid_device_id, list_devices, forget_device, set_nickname
   src/commands/session.rs              PairingCode (no Debug), ConnectOutcome, PendingConnect slot, connect_with_code, cancel_pending, StopOutcome, stop_session, connect_with_device; PendingConnect slot = (token, sender)
+  tests/e2e_real_daemon.rs            real relay + phone agent + daemon; skips without SETU_E2E_BIN_DIR. Hold one adb_addr stream open across an outage: path events are per tunnel
   tests/session_commands.rs            12 tests (pairing P02/P19, stop P17, no code leak)
   src/events/model.rs                  SessionInfo, HubEvent (10-type allowlist incl. audit_session_start), HubMessage, parse_notification, parse_session_list
   src/events/gate.rs                   ResyncGate: epoch, Live | Resyncing{buffer, again}
@@ -59,8 +60,6 @@ src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (
   src/rpc/framing.rs                   encode(), LineDecoder, MAX_LINE_BYTES (1 MiB, excl. newline)
   src/rpc/client.rs                    RpcClient, Notification, VersionInfo (~265 lines)
   src/rpc/errors.rs                    SetuError, from_error_object()
-  tests/framing.rs                     9 framing tests
-  tests/error_mapping.rs               P11 table test (all rows + unknown codes)
   tests/rpc_client.rs                  13 client tests (order, busy, notifications, disconnect, drop)
   tests/support/fake_daemon.rs         FakeDaemon: in-process JSON-RPC line server on 127.0.0.1:0
   src/daemon/workspace.rs              Workspace (Solo | Corporate{org_slug}), state_dir(), attach record r/w (AD-7)
@@ -133,6 +132,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| UK-01 | [#26](https://github.com/SumukhaK/Setu-Desktop/pull/26) | CI on Linux + Windows MSVC and a real-daemon e2e job. The e2e failed until the reviewer's fix (#27) kept one ADB stream open across the relay outage. |
 | DT-08 | [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24) | Saved devices list, nicknames (AD-14), connect by id, forget with inline confirm, SlotGuard token fix. No review round; gates re-run on Linux and a live run against daemon v1.1.0 passed. |
 | DT-07 | [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21) | Rejoin banners: pure `rejoinMachine`, one-timer `RejoinBanner`, `at` stamps on tunnels, one Clock shared by store and cards. No review round; gates re-run on Linux. |
 | DT-06 | [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19) | Session card, three-fact status strip (Listener, Local ADB, Transport), Disconnect via `session.stop`, audit transport fallback. No review round; gates re-run on Linux. |
@@ -143,8 +143,8 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 
 ## Open items
 
-- Active ticket: UK-01 · CI gates (Linux, Windows MSVC) and a real-daemon smoke test (prompt issued 2026-11-22). SDK binaries come from `SumukhaK/Setu` tag v1.1.0 via `go build`; the test skips unless `SETU_E2E_BIN_DIR` is set.
-- 2026-11-22 audit (TDD_TICKETS §5a): upkeep UK-01 CI + real-daemon smoke (after DT-08), UK-02 app shell/nav/styling incl. dev-only CSP, UK-03 Solo end states (`ended` is collected but never rendered), UK-04 nits (PairDialog, DeviceList load and DeviceDetail save don't catch a rejected invoke, RejoinBanner re-arm, hub `Unavailable` per retry, build.rs WebView2 path). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
+- Active ticket: UK-02 · App shell, navigation rail, pages and styling (prompt issued 2026-11-22). Page state in App (no router), `src/styles/app.css` from the prototype tokens, `Icon.tsx`, static Solo picker, prod CSP unchanged + dev-only `devCsp`, no inline styles.
+- 2026-11-22 audit (TDD_TICKETS §5a): upkeep UK-01 done (#26), UK-02 app shell/nav/styling incl. dev-only CSP, UK-03 Solo end states (`ended` is collected but never rendered), UK-04 nits (PairDialog, DeviceList load and DeviceDetail save don't catch a rejected invoke, RejoinBanner re-arm, hub `Unavailable` per retry, build.rs WebView2 path). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
 - Design rebase merged (#8): the phone's session label is now shown as **Connected as (unverified)** (peerLabel may be the desktop label, corporate user or key fingerprint). The T−5 minute warning hook (`setuDesktopSessionDeadline`) has no v1.1.0 source: native tickets must never feed it a credential `expires_at`. The page allowlist excludes `auth.set_token` and `identity.public_key` (native only, DT-14).
-- No CI yet (candidate `upkeep/` ticket). Merged `feature/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
+- Merged `feature/*` and `upkeep/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
 - SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes. v1.1.0 prints only `daemon_ready` on stdout; if a future daemon writes more, recheck the drain thread on SDK upgrades.
