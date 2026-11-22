@@ -5,6 +5,8 @@ export type ConnectOutcome =
   | { outcome: "already_pending" }
   | { outcome: "bad_code" }
   | { outcome: "unavailable" }
+  | { outcome: "not_paired" }
+  | { outcome: "revoked" }
   | { outcome: "cancelled" }
   | { outcome: "failed"; code: number | null };
 
@@ -22,6 +24,10 @@ export function outcomeMessage(outcome: ConnectOutcome): string | null {
       return "That code didn't work. Check the 10 digits and that the phone is still hosting. After 3 wrong tries the phone shows a new code.";
     case "unavailable":
       return "The phone can't be reached right now. Make sure Setu is hosting on the phone, then try again.";
+    case "not_paired":
+      return "This device isn't paired any more. Pair it again with a new code.";
+    case "revoked":
+      return "Access to this device was revoked.";
     case "not_ready":
       return "The Setu service isn't ready yet. Try again in a moment.";
     case "already_pending":

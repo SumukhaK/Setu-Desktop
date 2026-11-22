@@ -18,22 +18,37 @@ mod shell {
 
     use crate::adb::{self, AdbConnectOutcome, AdbSnapshot, AdbWatcher};
     use crate::app::status::{resolve_daemon_path, resolve_relay, status_of, AppStatus};
-    use crate::commands::session::{stop_session, StopOutcome};
+    use crate::commands::devices::{
+        forget_device, list_devices, set_nickname, ForgetOutcome, ListOutcome, NicknameOutcome,
+    };
+    use crate::commands::session::{connect_with_device, stop_session, StopOutcome};
     use crate::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
     use crate::events::{start as start_event_hub, EventHub};
+    use crate::store::nicknames::NicknameStore;
 
     struct AppState {
         status: Mutex<AppStatus>,
         supervisor: Option<Supervisor>,
         hub: Option<EventHub>,
         pending: PendingConnect,
+        nicknames: NicknameStore,
         _adb: AdbWatcher,
         adb_status: watch::Receiver<AdbSnapshot>,
     }
 
     fn lock_status(state: &AppState) -> MutexGuard<'_, AppStatus> {
         state.status.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn ready_client(state: &AppState) -> Option<crate::rpc::RpcClient> {
+        state
+            .supervisor
+            .as_ref()
+            .and_then(|supervisor| match &*supervisor.subscribe().borrow() {
+                DaemonState::Ready { client, .. } => Some(client.clone()),
+                _ => None,
+            })
     }
 
     #[tauri::command]
@@ -65,6 +80,36 @@ mod shell {
     #[tauri::command]
     fn session_cancel_connect(state: tauri::State<'_, AppState>) -> bool {
         cancel_pending(&state.pending)
+    }
+
+    #[tauri::command]
+    async fn session_connect_device(
+        device_id: String,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<ConnectOutcome, String> {
+        Ok(connect_with_device(ready_client(&state), &device_id, &state.pending).await)
+    }
+
+    #[tauri::command]
+    async fn devices_list(state: tauri::State<'_, AppState>) -> Result<ListOutcome, String> {
+        Ok(list_devices(ready_client(&state), &state.nicknames).await)
+    }
+
+    #[tauri::command]
+    async fn devices_forget(
+        device_id: String,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<ForgetOutcome, String> {
+        Ok(forget_device(ready_client(&state), &device_id, &state.nicknames).await)
+    }
+
+    #[tauri::command]
+    fn device_set_nickname(
+        device_id: String,
+        nickname: String,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<NicknameOutcome, String> {
+        Ok(set_nickname(&state.nicknames, &device_id, &nickname))
     }
 
     #[tauri::command]
@@ -109,7 +154,11 @@ mod shell {
                 session_resync,
                 session_connect_code,
                 session_cancel_connect,
+                session_connect_device,
                 session_stop,
+                devices_list,
+                devices_forget,
+                device_set_nickname,
                 adb_status,
                 adb_connect
             ])
@@ -125,6 +174,7 @@ mod shell {
 
                 let app_data = app.path().app_data_dir()?;
                 let state_dir = Workspace::Solo.state_dir(&app_data);
+                let nicknames = NicknameStore::new(&state_dir);
                 let supervisor = match relay {
                     Some(relay) => {
                         let exe_dir = std::env::current_exe()
@@ -158,9 +208,10 @@ mod shell {
                 let states = supervisor.as_ref().map(Supervisor::subscribe);
                 let hub_pair = states.as_ref().map(|receiver| {
                     let receiver = receiver.clone();
-                    tauri::async_runtime::block_on(
-                        async move { start_event_hub(receiver, state_dir) },
-                    )
+                    let hub_state_dir = state_dir.clone();
+                    tauri::async_runtime::block_on(async move {
+                        start_event_hub(receiver, hub_state_dir)
+                    })
                 });
 
                 // The ADB watcher is independent of the relay: it always runs,
@@ -174,6 +225,7 @@ mod shell {
                     supervisor,
                     hub: hub_pair.as_ref().map(|(hub, _)| hub.clone()),
                     pending: PendingConnect::default(),
+                    nicknames,
                     _adb: watcher,
                     adb_status: adb_status.clone(),
                 });
