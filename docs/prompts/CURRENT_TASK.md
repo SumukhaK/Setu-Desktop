@@ -1,89 +1,137 @@
-# Builder prompt · UK-01 · CI and real-daemon smoke test
+# Builder prompt · UK-02 · App shell: navigation rail, pages and styling
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
 1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-14).
-2. `docs/TDD_TICKETS.md` §5a "UK-01".
-3. Existing code you'll drive, as public API, without changing it:
-   - `src-tauri/src/daemon/` (`Supervisor`, `DaemonConfig`, `DaemonState`, `Workspace`)
-   - `src-tauri/src/events/` (`events::start`, `HubMessage`, `HubEvent`)
-   - `src-tauri/src/commands/` (`connect_with_code`, `connect_with_device`, `stop_session`, `list_devices`, `forget_device`, `PendingConnect`)
-   - `src-tauri/src/store/nicknames.rs`
-4. Setu-SDK v1.1.0, `core/cmd/setu` (`setu relay`, `setu device`) and `core/cmd/setu-daemon`: https://github.com/SumukhaK/Setu/tree/v1.1.0/core/cmd
+2. `docs/TDD_TICKETS.md` §5a "UK-02".
+3. `docs/SCREENS.md`: the layout block at the top ("Relay sidebar and workspace cards with the Signal status strip"), and rows D03 and D04.
+4. The prototype, which is the **visual reference only, never app code**:
+   - `index.html`: the chrome header.
+   - `styles.css`: the tokens in `:root`, plus `.chrome`, `.wordmark`, `.brand-mark`, `.shell`, `.rail`, `.workspace-picker`, `.rail-nav`, `.nav-link`, `.main-pane`, `.main-inner`, `.app-status`, `.page-heading`, `.button*`, `.card`, `.section-header`, `.session-card`, `.status*`, `.signal-strip`, `.notice*`, `.list*`, `dialog`, `.dialog-*`, and the `@media` rules for those.
+   - `prototype.js`: `icons`, `railButton`, `render`, `workspacePage`, `sessionCard`, `signalStrip`, `devicesPage`.
+5. Existing UI you'll restyle without changing behaviour:
+   - `src/App.tsx`
+   - `src/daemon/StatusStrip.tsx`
+   - `src/features/session/*` (`SessionCard`, `StatusStrip`, `RejoinBanner`)
+   - `src/features/adb/SessionAdbLine.tsx`
+   - `src/features/pair/PairDialog.tsx`
+   - `src/features/devices/*`
+6. `src-tauri/tauri.conf.json` (`app.security.csp`).
 
-**Facts this ticket relies on (verified by the reviewer against binaries built from tag `v1.1.0` on 2026-11-22):**
-- `go build -o <dir> ./cmd/setu ./cmd/setu-daemon`, run from `core/` with Go 1.24, builds both binaries.
-- `setu relay --listen 127.0.0.1:<port> --state <dir>` is a Solo relay.
-- `setu device --relay 127.0.0.1:<port> --adbd 127.0.0.1:<echo port> --name phone --state <dir>` is the phone agent. It prints JSON lines on stdout, including `{"event":"pairing_code","code":"NNNN-NNNNNN","device_id":"dev-…"}`. The agent frames ADB packets, so raw bytes don't round-trip. Send one 24-byte ADB header: six little-endian u32 values `CNXN 0x4e584e43`, `0x01000000`, `4096`, `0`, `0`, and `0x4e584e43 ^ 0xffffffff`. The echo server returns the same 24 bytes.
-- Killing the relay for 4 s and restarting it on the same port makes the hub forward `path_down` then `path_up` (`relay-tcp`, `outage_ms` ≈ 5100) for one tunnel id, and bytes still round-trip afterwards.
-- `session.stop` emits a `path_down` just before `session_down`. Don't assert that no `path_down` follows the outage.
-- `devices.forget` → `{}`. A second forget → `-32012`. `connect_with_device` after a forget → `NotPaired`.
+**Fact this ticket relies on:** Vite emits imported CSS as a linked stylesheet in `npm run build`, which the production CSP `style-src 'self'` allows. In `vite dev` it injects `<style>` tags, which that CSP blocks. Tauri v2 has a separate `app.security.devCsp` for dev builds.
 
 ## 1. Goal
 
-Every PR gets the full gate set on Linux and Windows, plus one real-SDK end-to-end run on Linux. Today the reviewer re-runs the gates by hand and nothing runs against a real daemon. This ticket changes no app behaviour.
+The app gets the selected layout: a top chrome bar with the wordmark, a left rail and a main pane. The rail has the workspace label at the top and navigation below it. The main pane has a page heading, the page content and the footer `Setu-SDK v1.1.0`.
+
+There are two pages:
+- **Workspace:** the daemon status strip, the session cards and **Pair new device**.
+- **Devices:** the DT-08 Saved devices list.
+
+Existing components get the prototype's look through class names and one stylesheet. **Behaviour, copy, roles and labels don't change**, so every existing test keeps passing unedited, except the few App tests that must click into Devices first.
+
+Out of scope:
+- The workspace switcher (the D01 Corporate entry). The picker is a static label, "Solo" over "Solo mode", until DT-14.
+- The topology diagram.
+- Tray (DT-09).
+- Pages for Audit log, Diagnostics and Settings. Each later ticket adds its own rail item.
+- Toasts.
+- Dark mode.
 
 ## 2. Files (create or change only these)
 
 ```
-.github/workflows/ci.yml                  three jobs (§3)
-src-tauri/tests/e2e_real_daemon.rs        the smoke test (§3)
-README.md                                 + a short "Real-daemon smoke test" section: how to build the SDK binaries and run the test locally
+src/styles/app.css                    tokens + the ported rules in §3 (≤ ~350 lines)
+src/app/Icon.tsx                      <Icon name size> rendering the prototype's SVG paths for: grid, phone, laptop, plus, link, unlink, terminal, monitor
+src/app/Shell.tsx                     chrome + rail + main pane + footer; props { page, onNavigate, children }
+src/app/Shell.test.tsx
+src/app/WorkspacePage.tsx             what App renders today minus DeviceList, under heading "Workspace"
+src/app/DevicesPage.tsx               DeviceList under heading "Devices"
+src/App.tsx, src/App.test.tsx         page state; hooks stay in App
+src/main.tsx                          import "./styles/app.css" once
+src/index.html                        <html lang="en">, <meta name="color-scheme" content="light">; nothing else
+src/daemon/StatusStrip.tsx            className only
+src/features/session/SessionCard.tsx, StatusStrip.tsx, RejoinBanner.tsx   className only
+src/features/adb/SessionAdbLine.tsx    className only
+src/features/pair/PairDialog.tsx       className only
+src/features/devices/DeviceList.tsx, DeviceDetail.tsx                       className only
+src-tauri/tauri.conf.json              + app.security.devCsp (§3)
 ```
 
-Don't change anything under `src/` or `src-tauri/src/`, `Cargo.toml` or `package.json`. Add no crate and no npm package (`tokio`, `serde_json` and `tempfile` are already available to tests). If `Cargo.toml` truly must change, stop and say why.
+"className only" means you may add `className` attributes and wrapping `<div>`s with no role. You must not change text, roles, `aria-*`, handlers, element order, or the element types that tests query. Don't touch `src-tauri/src/`, `src/state/`, `src/platform/`, any `*Port.ts`, `docs/`, `README.md`, the root prototype files, or CI. Add no npm package (no router, CSS framework or icon library).
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**Workflow (`.github/workflows/ci.yml`).** It runs `on: pull_request` and `push` to `main`, with `permissions: contents: read` and a `concurrency` group per ref that cancels in-progress runs.
+**Page state (App).**
+- `type Page = "workspace" | "devices"`, held in `useState<Page>("workspace")` in `App`.
+- `useSessions`, `useAdbStatus` and the pairing-dialog open state stay in `App`, above both pages, so switching pages never resubscribes or drops a session.
+- The Devices rail item renders only when `devicesPort` is given.
+- No URL routing, no hash and no history.
 
-1. `gates-linux` (`ubuntu-latest`):
-   - `apt-get install` `libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`
-   - `actions/setup-node` with Node 22 and an npm cache
-   - `dtolnay/rust-toolchain@stable` with `rustfmt, clippy`, then `Swatinem/rust-cache` with `workspaces: src-tauri`
-   - then, in order: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test`, `npm run build`, and in `src-tauri`: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
-2. `gates-windows` (`windows-latest`, the MSVC toolchain): the same steps without `apt-get`.
-3. `e2e-linux` (`ubuntu-latest`, `needs: gates-linux`):
-   - the same apt, Node and Rust setup
-   - `actions/checkout` a second time with `repository: SumukhaK/Setu`, `ref: v1.1.0`, `path: setu-sdk`
-   - `actions/setup-go` with `go-version-file: setu-sdk/core/go.mod`
-   - `cd setu-sdk/core && go build -o "$RUNNER_TEMP/setu-bin" ./cmd/setu ./cmd/setu-daemon`
-   - `SETU_E2E_BIN_DIR=$RUNNER_TEMP/setu-bin cargo test --test e2e_real_daemon -- --nocapture` from `src-tauri`
+**Shell.**
+- `<header className="chrome">`: the wordmark `<span className="wordmark">` (brand mark, "setu" and a period), not a link. The demo-scenarios button is not ported.
+- `<div className="shell">` containing:
+  - `<aside className="rail">`, which holds:
+    - a static `<div className="workspace-picker">` with the laptop glyph, `<strong>Solo</strong>` and `<small>Solo mode</small>`, with no button role
+    - `<nav aria-label="Workspace navigation" className="rail-nav">` with a `<button className="nav-link">` per page (icon + label: grid "Workspace", phone "Devices"). The current page's button has `aria-current="page"` and the `active` class.
+  - `<main id="main" className="main-pane" tabIndex={-1}>` containing `<div className="main-inner">{children}</div>` and `<footer className="app-status">Setu-SDK v1.1.0</footer>`.
+- On navigation, move focus to the new page's `<h1>` (`tabIndex={-1}`), as the prototype does.
 
-   If the SDK checkout fails for permissions, pass `token: ${{ secrets.SETU_SDK_TOKEN }}` and say in the PR that the owner must add a read-only fine-grained token with that name. Don't commit any token.
+**Pages.**
+- Each page opens with `<header className="page-heading"><div><h1 tabIndex={-1}>…</h1><p>…</p></div></header>`:
+  - Workspace: subtitle "This computer · Solo · Local-first".
+  - Devices: subtitle "Paired phones on this computer".
+- Today's App heading `<h1>Setu</h1>` moves into the chrome as the wordmark. Each page's `<h1>` is its title.
+- Workspace renders, in today's order:
+  1. the daemon `StatusStrip`
+  2. the session count line
+  3. the `SessionCard`s (each in `className="card session-card"`)
+  4. **Pair new device** (`button primary`)
+  5. `PairDialog`
 
-No `continue-on-error`, no skipped steps, and no matrix beyond these three jobs.
+**Styles (`app.css`).**
+- Copy the `:root` tokens **verbatim**, plus the base rules (`*`, `body`, buttons, focus-visible, `h1`–`h3`, `code`).
+- Port only the selectors listed in §0.4 that a rendered component uses.
+- Map them onto existing elements:
 
-**Smoke test (`tests/e2e_real_daemon.rs`).**
-- One `#[tokio::test(flavor = "multi_thread")]`. If `SETU_E2E_BIN_DIR` is unset, it prints one line and returns, so it passes. With the variable set, every step is required.
-- Helpers, all inside this file:
-  - `free_port()`: bind `127.0.0.1:0`, read the port, then drop the listener.
-  - A `Child` guard that kills its process on `Drop`.
-  - An in-test echo server on a free port, run in a std thread.
-  - Every wait is wrapped in `tokio::time::timeout`, and the whole test finishes in under 60 s. A failure must never hang CI.
-- Steps:
-  1. Start the relay, then the device agent with `--adbd` set to the echo port. Read stdout lines until `pairing_code` (10 s timeout).
-  2. Start `Supervisor::start(Workspace::Solo, <tempdir>, DaemonConfig { daemon_path: <bin>/setu-daemon, relay: "127.0.0.1:<port>", label: Some("e2e"), adb_path: None, relay_pin: None, proxy: None, corporate: None })`. Wait for `DaemonState::Ready`, then call `events::start(sup.subscribe(), Workspace::Solo.state_dir(&app_data))`.
-  3. Assert the first hub message is a `Snapshot` with no sessions.
-  4. Run `connect_with_code` with the agent's code and assert `Connected`. The hub forwards `Listening` and `SessionUp` for that session id.
-  5. Open TCP to `adb_addr`, send the 24-byte header and read exactly 24 bytes back.
-  6. Kill the relay, wait 4 s, and restart it on the same port. Within 20 s, assert the hub forwarded `PathDown` then `PathUp` with the same `tunnel_id`. The header must round-trip again.
-  7. Run `stop_session`, assert `Stopped`, and assert `SessionDown { abnormal: false }` for that session within 5 s.
-  8. Run `set_nickname(store, device_id, "  E2E ")` → `Saved{Some("E2E")}`, then `list_devices` → one row with that nickname.
-  9. Run `connect_with_device(device_id)` → `Connected`, then `stop_session` → `Stopped`.
-  10. Run `forget_device` → `Forgotten`, and a second `forget_device` → `NotPaired`. `list_devices` returns `Listed{[]}`, and `connect_with_device` returns `NotPaired`.
-  11. Call `sup.stop().await`. The guards kill the agent and the relay.
-- Match on the typed enums (`HubMessage`, `HubEvent`, the outcome enums), not on JSON strings.
+  | Element | Class |
+  | --- | --- |
+  | session StatusStrip `<ul aria-label="Session status">` | `signal-strip` (three cells) |
+  | each fact | `<li>` cell |
+  | daemon strip | `notice` |
+  | RejoinBanner holding | `notice warning` |
+  | RejoinBanner lost | `notice warning` |
+  | alerts | `notice` |
+  | buttons | `button` plus `primary`, `secondary` or `quiet` |
+  | Disconnect | `button quiet danger` |
+  | device rows | `list` / `list-row` |
+  | DeviceDetail | `card` |
 
-## 4. TDD
+- The `.signal-strip` grid uses three columns, not the prototype's four.
+- **No inline `style={…}` anywhere**, because the production CSP forbids style attributes. No `!important` except the prototype's `[hidden]` rule.
 
-This ticket adds tests rather than behaviour, so "red first" means this:
-- Commit the workflow and the test first (`test(desktop): …`).
-- Show `cargo test --test e2e_real_daemon` passing **without** `SETU_E2E_BIN_DIR`, which skips with one line.
-- Show it passing **with** locally built v1.1.0 binaries, on Linux or WSL if you can. If you can't build them locally, say so; the CI run on the PR is then the evidence.
-- Paste the green CI run link for all three jobs in the PR.
+**CSP.**
+- Keep `app.security.csp` exactly as it is.
+- Add `"devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self'"`.
+- Add a Rust-free check: a Vitest test that reads `src-tauri/tauri.conf.json` and asserts that `csp` contains `style-src 'self'` and not `unsafe-inline`.
+
+## 4. TDD: write these tests first, see them fail, then implement
+
+- `Shell.test.tsx`:
+  - It renders the chrome wordmark, the Workspace navigation landmark, the "Solo mode" label and the footer `Setu-SDK v1.1.0`.
+  - Only the items passed in render; with no `devicesPort`, there's no Devices button.
+  - The current item has `aria-current="page"`. Clicking another item calls `onNavigate` with its page.
+- `App.test.tsx`:
+  - The default page is Workspace, and its `h1` is "Workspace".
+  - Clicking **Devices** shows the Saved devices section, focuses the "Devices" `h1`, and hides the session cards.
+  - Going back to Workspace still shows the live session card. It stays live even when a hub event arrives while on Devices.
+  - The fake hub `subscribe` was called **once** across both switches.
+  - The pairing dialog opened on Workspace is still open after Devices and back again.
+  - Update the existing App tests that look for the device list so they click **Devices** first. No other existing test may change.
+- CSP test as in §3.
+- **Visual evidence:** attach to the PR two screenshots from `npm run tauri dev` (Workspace with a session if you can pair a phone, otherwise empty; and Devices), and one from `npm run build && npx vite preview` with the devtools console showing no CSP errors.
 
 ## 5. Gates (all must pass before you push)
 
@@ -102,22 +150,24 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-All three CI jobs must be green on the PR's head commit. Use no `#[allow(...)]`, no `#[ignore]`, no `unwrap()` outside tests, and no lint downgrades. In this test file, `expect("what failed")` is preferred over bare `unwrap()`. If a CI job fails for an environment reason you can't fix in the workflow, stop and report the exact log lines.
+All three CI jobs (`gates-linux`, `gates-windows`, `e2e-linux`) must be green on the PR head. Use no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no non-null `!`, and no inline styles. If a gate fails for a reason you can't fix in code, stop and report the exact error.
 
 ## 6. Architecture and Karpathy pillars (enforced at review)
 
-- **Rust/React separation.** The smoke test drives only the Rust core's public API, the same functions the Tauri commands call. It never imports `tauri` (AD-1).
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If the real daemon differs from §0, follow the daemon, assert what it does, and record it.
-2. **Simplicity first.** One workflow file and one test file. No composite actions, no reusable workflows, no scripts directory and no Docker.
-3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `upkeep/UK-01-ci-e2e`, with conventional commits (`test(desktop): …` or `ci: …`).
-4. **Goal-driven.** Done means three green CI jobs on the PR, plus the local skip run.
+- **Rust/React separation.** No native change apart from `devCsp`. Pages compose the existing feature components, and the features keep owning their behaviour.
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. List every prototype selector you did **not** port, and why.
+2. **Simplicity first.** One stylesheet, one icon component, one shell, two pages. No router, no CSS modules, no theme provider, no animation.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `upkeep/UK-02-app-shell`, with atomic commits:
+   - `test(desktop): …` red
+   - `feat(desktop): …` green
+4. **Goal-driven TDD.** Commit the failing tests first. Paste the red excerpt and the green gate output in the PR, plus the CI links and the screenshots.
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `ci: UK-01 CI gates and real-daemon smoke test`, with this body:
+Open one PR against `main` titled `feat(desktop): UK-02 app shell, navigation and styling`, with this body:
 
 ```
-Ticket: UK-01 (docs/TDD_TICKETS.md §5a)
+Ticket: UK-02 (docs/TDD_TICKETS.md §5a) · Reference: SCREENS.md layout, D03, D04; prototype styles.css
 
 ## Assumptions & Trade-offs
 - …
@@ -127,11 +177,13 @@ Ticket: UK-01 (docs/TDD_TICKETS.md §5a)
 
 ## Test evidence
 OS: …
-<local cargo test --test e2e_real_daemon output: skip line, and the real run if available>
-<links to the green gates-linux, gates-windows and e2e-linux runs>
+<red run excerpt>
+<green gate output>
+<CI run links>
+<screenshots: Workspace, Devices, production preview console>
 
-## Out of scope
-- packaging (DT-17), corporate mode, the app shell (UK-02)
+## Out of scope (left for later tickets)
+- workspace switcher (DT-14), topology diagram, tray (DT-09), Audit/Diagnostics/Settings pages (DT-11..DT-13), Solo end states (UK-03)
 ```
 
-Then **stop immediately**. Don't start UK-02, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start UK-03, don't edit `docs/`, and don't merge.

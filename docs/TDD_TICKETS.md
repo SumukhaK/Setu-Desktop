@@ -19,7 +19,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-06 · Session card and status strip · Done in [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19)
 - [x] DT-07 · Path and rejoin banners · Done in [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21)
 - [x] DT-08 · Devices list, forget and nicknames (solo) · Done in [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24)
-- [ ] UK-01 · CI and real-daemon smoke test · pick up right after DT-08 merges
+- [x] UK-01 · CI and real-daemon smoke test · Done in [#26](https://github.com/SumukhaK/Setu-Desktop/pull/26)
 - [ ] UK-02 · App shell: navigation rail, pages and styling · after UK-01, before DT-09
 - [ ] UK-03 · Solo end states and Reconnect · after UK-02, before DT-09
 - [ ] UK-04 · Robustness nits · before DT-10
