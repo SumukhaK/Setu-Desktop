@@ -34,3 +34,9 @@ name = "fake-setu-daemon"
 path = "tests/support/fake_setu_daemon.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fake-adb"
+path = "tests/support/fake_adb.rs"
+test = false
+doc = false

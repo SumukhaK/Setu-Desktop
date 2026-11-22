@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import type { DaemonPort, DaemonStatus } from "../daemon/status";
+import type { AdbConnectOutcome, AdbPort, AdbSnapshot } from "../features/adb/adbStatus";
 import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
 import type { HubMessage } from "../state/sessionStore";
 import type { SessionHubPort } from "../state/useSessions";
@@ -34,5 +35,19 @@ export const tauriSessionHubPort: SessionHubPort = {
     return listen<HubMessage>("session-hub", (event) => {
       onMessage(event.payload);
     });
+  },
+};
+
+export const tauriAdbPort: AdbPort = {
+  current() {
+    return invoke<AdbSnapshot>("adb_status");
+  },
+  subscribe(onSnapshot) {
+    return listen<AdbSnapshot>("adb-status", (event) => {
+      onSnapshot(event.payload);
+    });
+  },
+  connect(adbAddr) {
+    return invoke<AdbConnectOutcome>("adb_connect", { adbAddr });
   },
 };
