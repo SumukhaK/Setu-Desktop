@@ -51,9 +51,9 @@ export type HubMessage =
   | { kind: "unavailable"; generation: number };
 
 export type TunnelState =
-  | { state: "up"; transport: string }
+  | { state: "up"; transport: string; at: number }
   | { state: "down"; since: number; reason: string; transport: string }
-  | { state: "lost"; reason: string };
+  | { state: "lost"; reason: string; at: number };
 
 export interface LiveSession {
   sessionId: string;
@@ -218,17 +218,26 @@ function reduceEvent(
   const tunnels = { ...previous.tunnels };
   let transport = previous.transport;
   if (event.type === "path_down") {
-    tunnels[event.tunnel_id] = {
-      state: "down",
-      since: now,
-      reason: event.reason,
-      transport: event.transport,
-    };
+    const existing = previous.tunnels[event.tunnel_id];
+    tunnels[event.tunnel_id] =
+      existing?.state === "down"
+        ? {
+            state: "down",
+            since: existing.since,
+            reason: event.reason,
+            transport: event.transport,
+          }
+        : {
+            state: "down",
+            since: now,
+            reason: event.reason,
+            transport: event.transport,
+          };
   } else if (event.type === "path_up") {
-    tunnels[event.tunnel_id] = { state: "up", transport: event.transport };
+    tunnels[event.tunnel_id] = { state: "up", transport: event.transport, at: now };
     transport = event.transport;
   } else {
-    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason };
+    tunnels[event.tunnel_id] = { state: "lost", reason: event.reason, at: now };
   }
   return {
     ...state,

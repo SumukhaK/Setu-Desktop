@@ -1,8 +1,10 @@
 import { useState } from "react";
 
+import type { Clock } from "../../state/clock";
 import type { LiveSession } from "../../state/sessionStore";
 import { SessionAdbLine } from "../adb/SessionAdbLine";
 import type { AdbPort, AdbSnapshot } from "../adb/adbStatus";
+import { RejoinBanner } from "./RejoinBanner";
 import { StatusStrip } from "./StatusStrip";
 import { stopMessage } from "./sessionPort";
 import type { SessionPort, StopOutcome } from "./sessionPort";
@@ -10,12 +12,14 @@ import type { SessionPort, StopOutcome } from "./sessionPort";
 export function SessionCard({
   session,
   adb,
+  clock,
   adbPort,
   sessionPort,
   clipboard,
 }: {
   session: LiveSession;
   adb: AdbSnapshot | null;
+  clock: Clock;
   adbPort: AdbPort | null;
   sessionPort: SessionPort;
   clipboard: { writeText(s: string): Promise<void> };
@@ -53,6 +57,7 @@ export function SessionCard({
   return (
     <article aria-labelledby={headingId}>
       <h2 id={headingId}>{session.deviceId}</h2>
+      <RejoinBanner session={session} adb={adb} clock={clock} />
       <StatusStrip session={session} adb={adb} />
       <SessionAdbLine session={session} adb={adb} port={adbPort} />
       {session.adbAddr !== null && (
