@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use setu_desktop::commands::session::{connect_with_device, stop_session, StopOutcome};
@@ -31,6 +32,8 @@ fn free_port() -> u16 {
     drop(listener);
     port
 }
+
+type CodeChannel = Arc<Mutex<std::sync::mpsc::Receiver<(String, String)>>>;
 
 /// Kills the child on every exit path, including a panic.
 struct ChildGuard(Child);
@@ -90,7 +93,7 @@ fn start_device(
     relay_port: u16,
     echo_port: u16,
     state: &Path,
-) -> (ChildGuard, std::sync::mpsc::Receiver<(String, String)>) {
+) -> (ChildGuard, CodeChannel) {
     let args = [
         "device",
         "--relay",
@@ -113,7 +116,6 @@ fn start_device(
 
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            println!("agent: {line}");
             let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
@@ -123,13 +125,19 @@ fn start_device(
             let code = event.get("code").and_then(|value| value.as_str());
             let device_id = event.get("device_id").and_then(|value| value.as_str());
             if let (Some(code), Some(device_id)) = (code, device_id) {
-                let _ = code_tx.send((code.to_owned(), device_id.to_owned()));
-                break;
+                // The agent rotates a code after a failed attempt or a relay
+                // reconnect; the newest one is the one the relay knows.
+                if code_tx
+                    .send((code.to_owned(), device_id.to_owned()))
+                    .is_err()
+                {
+                    break;
+                }
             }
         }
     });
 
-    (ChildGuard(child), code_rx)
+    (ChildGuard(child), Arc::new(Mutex::new(code_rx)))
 }
 
 fn ready_client(supervisor: &Supervisor) -> Option<RpcClient> {
@@ -201,10 +209,14 @@ async fn run(bin_dir: PathBuf) {
     std::fs::create_dir_all(&device_state).expect("device state dir");
 
     let mut relay = Some(start_relay(&bin_dir, relay_port, &relay_state));
-    let (device, code_rx) = start_device(&bin_dir, relay_port, echo_addr.port(), &device_state);
-    let (code, device_id) = timeout(
+    let (device, codes) = start_device(&bin_dir, relay_port, echo_addr.port(), &device_state);
+    let first_codes = Arc::clone(&codes);
+    let (mut code, device_id) = timeout(
         Duration::from_secs(10),
-        tokio::task::spawn_blocking(move || code_rx.recv()),
+        tokio::task::spawn_blocking(move || {
+            let receiver = first_codes.lock().expect("pairing code channel");
+            receiver.recv()
+        }),
     )
     .await
     .expect("a pairing code from the phone agent")
@@ -248,6 +260,15 @@ async fn run(bin_dir: PathBuf) {
         other => panic!("expected the first snapshot, got {other:?}"),
     }
 
+    // The agent rotates a code after a reconnect; pair with the newest one.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    {
+        let receiver = codes.lock().expect("pairing code channel");
+        while let Ok((newer, _)) = receiver.try_recv() {
+            code = newer;
+        }
+    }
+
     let pending = PendingConnect::default();
     let outcome = timeout(
         STEP,
@@ -255,7 +276,6 @@ async fn run(bin_dir: PathBuf) {
     )
     .await
     .expect("pairing finishes");
-    println!("pairing outcome: {outcome:?}");
     let (session_id, addr) = match outcome {
         ConnectOutcome::Connected {
             session_id,
