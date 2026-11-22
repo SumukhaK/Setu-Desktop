@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-22 · main @ `b6038fd` (DT-07 merged, DT-08 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-22 · main @ `8076c86` (DT-08 merged, UK-01 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -32,30 +32,30 @@ src/                                   React UI (Vite root; AD-9)
   daemon/StatusStrip.tsx               role="status", "Checking…" until first status
   features/adb/                       adbStatus (AdbSnapshot mirror, attachmentOf exact serial, labels), useAdbStatus, SessionAdbLine (+ Connect ADB)
   features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog
+  features/devices/                  devicesPort (List/Forget/Nickname outcome mirrors, messages), DeviceList (request counter), DeviceDetail (inline forget confirm)
   features/session/                   transport (transportOf path>audit>unknown, transportLabel), StatusStrip, sessionPort (StopOutcome, stopMessage), SessionCard(clock), rejoinMachine (rejoinViewOf, nextWakeAt), RejoinBanner
   state/clock.ts                       Clock { now() } + systemClock (performance.now)
   state/sessionStore.ts                HubMessage/HubEvent mirrors, SessionStoreState, pure reduce(state, msg, now)
   state/useSessions.ts                 SessionHubPort, useSessions(port, clock): subscribe first, then resync()
   platform/tauri.ts                    tauriDaemonPort, tauriSessionHubPort, tauriSessionPort: the only @tauri-apps/api import
-  test/setup.ts                        jest-dom + cleanup
 src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (default-run) + bin `fake-setu-daemon`
   Cargo.toml Cargo.lock build.rs       build.rs: tauri_build + Windows test manifest / WebView2Loader.dll copy (GNU)
   tauri.conf.json capabilities/ icons/ one "main" window "Setu", strict CSP, bundle inactive, no externalBin
-  src/main.rs                          setu_desktop::app::run()
-  src/lib.rs                           pub mod adb; pub mod app; pub mod commands; pub mod daemon; pub mod events; pub mod rpc;
+  src/lib.rs                           pub mod adb; app; commands; daemon; events; rpc; store;
   src/app/mod.rs                       #[cfg(not(test))] mod shell: builder, single-instance, setup, status forwarder, daemon_status
   src/app/status.rs                    AppStatus, status_of, resolve_daemon_path, resolve_relay (+ unit tests)
   src/adb/protocol.rs                  encode_request, FrameReader (4-hex framing), parse_device_list, is_loopback_serial
   src/adb/track.rs                     watcher: host:track-devices-l, AdbSnapshot Unknown|Down|Up{devices}, backoff 0.5→5 s, never starts adb
   src/adb/connect.rs                   resolve_adb_path (SETU_ADB_PATH|adb), resolve_adb_server (ANDROID_ADB_SERVER_PORT|5037), adb_connect → AdbConnectOutcome
   tests/adb_track.rs tests/adb_connect.rs  7 + 6 tests; support: fake_adb_server.rs, fake_adb.rs ([[bin]] fake-adb)
-  src/commands/session.rs              PairingCode (no Debug), ConnectOutcome, PendingConnect slot, connect_with_code, cancel_pending, StopOutcome, stop_session
+  src/store/nicknames.rs               NicknameStore (AD-14), normalize_nickname → InvalidNickname
+  src/commands/devices.rs              DeviceRow, List/Forget/NicknameOutcome, valid_device_id, list_devices, forget_device, set_nickname
+  src/commands/session.rs              PairingCode (no Debug), ConnectOutcome, PendingConnect slot, connect_with_code, cancel_pending, StopOutcome, stop_session, connect_with_device; PendingConnect slot = (token, sender)
   tests/session_commands.rs            12 tests (pairing P02/P19, stop P17, no code leak)
   src/events/model.rs                  SessionInfo, HubEvent (10-type allowlist incl. audit_session_start), HubMessage, parse_notification, parse_session_list
   src/events/gate.rs                   ResyncGate: epoch, Live | Resyncing{buffer, again}
   src/events/hub.rs                    EventHub task: dedicated connection, subscribe → list → ordered forward, 1 s retry
   tests/event_hub.rs                   9 hub tests (wire order, P21, P18, P17, close/Stopped, auth rejection)
-  src/rpc/mod.rs                       re-exports
   src/rpc/framing.rs                   encode(), LineDecoder, MAX_LINE_BYTES (1 MiB, excl. newline)
   src/rpc/client.rs                    RpcClient, Notification, VersionInfo (~265 lines)
   src/rpc/errors.rs                    SetuError, from_error_object()
@@ -88,7 +88,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - `daemon::connect_authenticated(listen, &state_dir) -> Result<(RpcClient, Receiver<Notification>), SetuError>`: loopback only, token from `<state>/daemon.token`; else `Unauthorized`. `DaemonState::Ready` now has `listen: SocketAddr`.
 - `events::start(watch::Receiver<DaemonState>, state_dir) -> (EventHub, UnboundedReceiver<HubMessage>)`; `EventHub::resync()`. `HubMessage` (tag `kind`): `Snapshot{epoch, generation, sessions}` | `Event{epoch, generation, event}` | `Unavailable{generation}`. `HubEvent` (tag `type`): listening, session_up, retrying, session_down{abnormal}, path_down/up/lost{tunnel_id}, session_expired, peer_closed, audit_session_start{device_id, tunnel_id, transport}. Native → UI: event `"session-hub"` + command `session_resync`.
 - UI store: snapshot replaces `live` (epoch must not go back); events need `synced` and the same epoch; terminal events move a live session to `ended` (max 20, first reason wins); path events for non-live sessions or `lost` tunnels are ignored; `unavailable` clears `live`. `audit_session_start` sets `auditTransport` only on exactly one live session with that device. Tunnel states: up{at} | down{since} (a repeated path_down keeps since) | lost{at}.
-- Pairing: commands `session_connect_code(code) -> ConnectOutcome` (tag `outcome`: connected | malformed | not_ready | already_pending | bad_code | unavailable | cancelled | failed{code}) and `session_cancel_connect() -> bool`; client = current `Ready.client`. Rust re-validates `^\d{4}-\d{6}$`. `session_stop(session_id) -> StopOutcome` (stopped | no_session | not_ready | invalid | failed{code}); Rust validates `^s[0-9]{1,9}$`.
+- Pairing: commands `session_connect_code(code) -> ConnectOutcome` (tag `outcome`: connected | malformed | not_ready | already_pending | bad_code | unavailable | cancelled | failed{code}) and `session_cancel_connect() -> bool`; client = current `Ready.client`. Rust re-validates `^\d{4}-\d{6}$`. `session_stop(session_id) -> StopOutcome` (stopped | no_session | not_ready | invalid | failed{code}); Rust validates `^s[0-9]{1,9}$`. DT-08: `session_connect_device(device_id)` (same slot; + not_paired, revoked), `devices_list`, `devices_forget`, `device_set_nickname`.
 - ADB: event `"adb-status"` + commands `adb_status` / `adb_connect(adb_addr) -> AdbConnectOutcome` (connected | not_loopback | missing | timed_out | failed{detail ≤200}). The watcher runs even without a relay.
 - UI: `DaemonPort { current(), subscribe(cb) → Promise<unsubscribe> }`; `useDaemonStatus` subscribes first, a pushed status beats a late `current()`.
 - Test support: `FakeDaemon::start()`, `addr()`, `received()`, `wait_for_requests(n)`, `reply_with`, `reply_with_error`, delayed/reversed replies, `send_raw`, notifications, `close()`. Unscripted methods get `-32601`.
@@ -107,6 +107,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | `session.connect {pairing_code, timeout_ms}`, `session.cancel {request_id}` | `rpc::call_cancellable`, `commands::session`, `features/pair` | DT-04 |
 | `events.subscribe`, `event`, `events.dropped`, `session.list` | `events::{hub, gate, model}` → `src/state/sessionStore.ts` | DT-03b |
 | `session.stop`, audit `session_start` (transport fallback), `path_up` transport | `commands::session`, `events::model` → `features/session` | DT-06 |
+| `devices.list`, `devices.forget`, `session.connect {device_id}` | `commands::devices`, `connect_with_device` → `features/devices` | DT-08 |
 | `path_down` / `path_up` / `path_lost` banners (holding ≥ 10 s, lost only from the SDK) | `features/session/{rejoinMachine, RejoinBanner}` | DT-07 |
 
 ## Architecture decisions (binding on builders)
@@ -123,7 +124,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 - AD-11 (DT-03b): Raw daemon events never cross the bridge. Only the typed `HubEvent` allowlist does; unknown, malformed and secret-bearing types (`audit`, `token_updated`, `pairing_code`, …) are dropped, and error strings are never forwarded. DT-06 allows one audit shape: `audit_session_start{device_id, tunnel_id, transport}` (desktop role, 16-hex tunnel, known transport); `user`/`token_id` never cross.
 - AD-12 (DT-04): JSON-RPC ids never leave `rpc/`. Cancellation is a signal into `call_cancellable`, which cancels its own in-flight id on the same connection.
 - AD-13 (DT-05): Local ADB is observed, never trusted from the UI. Only loopback serials cross the bridge; `adb connect` runs only in Rust for a loopback `SocketAddr`; attachment = exact serial match in state `device`.
-- AD-14 (DT-08, decided): nicknames are a desktop-only JSON file `<state_dir>/desktop-nicknames.json` (`{version:1, nicknames:{<exact id>: name}}`, atomic write, corrupt → empty), not SQLite. Ids are byte-exact and never normalised; nicknames never reach the daemon.
+- AD-14 (DT-08): nicknames are a desktop-only JSON file `<state_dir>/desktop-nicknames.json` (`{version:1, nicknames:{<exact id>: name}}`, atomic write, corrupt → empty), not SQLite. Ids are byte-exact and never normalised; nicknames never reach the daemon.
 - AD-7 (DT-02): `setu-daemon` v1.1.0 has no single-instance guard per state dir. The app records the live daemon in `<state>/desktop-daemon.json` (`listen`, `pid`, `version`; no secrets). On start it attaches when that address authenticates with `<state>/daemon.token`, else it spawns.
 
 ## Completed tickets
@@ -132,6 +133,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| DT-08 | [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24) | Saved devices list, nicknames (AD-14), connect by id, forget with inline confirm, SlotGuard token fix. No review round; gates re-run on Linux and a live run against daemon v1.1.0 passed. |
 | DT-07 | [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21) | Rejoin banners: pure `rejoinMachine`, one-timer `RejoinBanner`, `at` stamps on tunnels, one Clock shared by store and cards. No review round; gates re-run on Linux. |
 | DT-06 | [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19) | Session card, three-fact status strip (Listener, Local ADB, Transport), Disconnect via `session.stop`, audit transport fallback. No review round; gates re-run on Linux. |
 | DT-05 | [#17](https://github.com/SumukhaK/Setu-Desktop/pull/17) | ADB watcher (track-devices-l, reconnect), loopback-only snapshot, `adb connect` with timeout, per-session ADB line. No review round; gates re-run on Linux. |
@@ -141,8 +143,8 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 
 ## Open items
 
-- Active ticket: DT-08 · Devices list, forget and nicknames (prompt issued 2026-11-22). Adds `store/nicknames.rs` (AD-14), `commands/devices.rs`, `connect_with_device` sharing the pending slot, ConnectOutcome `not_paired`/`revoked`, and the DT-04 SlotGuard token fix. `devices.forget` success has no `result` field (Go omitempty); `call` maps it to Null.
-- 2026-11-22 audit (TDD_TICKETS §5a): upkeep UK-01 CI + real-daemon smoke (after DT-08), UK-02 app shell/nav/styling incl. dev-only CSP, UK-03 Solo end states (`ended` is collected but never rendered), UK-04 nits (PairDialog invoke rejection, RejoinBanner re-arm, hub `Unavailable` per retry, build.rs WebView2 path). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
+- Active ticket: UK-01 · CI gates (Linux, Windows MSVC) and a real-daemon smoke test (prompt issued 2026-11-22). SDK binaries come from `SumukhaK/Setu` tag v1.1.0 via `go build`; the test skips unless `SETU_E2E_BIN_DIR` is set.
+- 2026-11-22 audit (TDD_TICKETS §5a): upkeep UK-01 CI + real-daemon smoke (after DT-08), UK-02 app shell/nav/styling incl. dev-only CSP, UK-03 Solo end states (`ended` is collected but never rendered), UK-04 nits (PairDialog, DeviceList load and DeviceDetail save don't catch a rejected invoke, RejoinBanner re-arm, hub `Unavailable` per retry, build.rs WebView2 path). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
 - Design rebase merged (#8): the phone's session label is now shown as **Connected as (unverified)** (peerLabel may be the desktop label, corporate user or key fingerprint). The T−5 minute warning hook (`setuDesktopSessionDeadline`) has no v1.1.0 source: native tickets must never feed it a credential `expires_at`. The page allowlist excludes `auth.set_token` and `identity.public_key` (native only, DT-14).
 - No CI yet (candidate `upkeep/` ticket). Merged `feature/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
 - SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes. v1.1.0 prints only `daemon_ready` on stdout; if a future daemon writes more, recheck the drain thread on SDK upgrades.

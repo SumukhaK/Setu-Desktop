@@ -18,7 +18,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-05 · Local ADB adapter · Done in [#17](https://github.com/SumukhaK/Setu-Desktop/pull/17)
 - [x] DT-06 · Session card and status strip · Done in [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19)
 - [x] DT-07 · Path and rejoin banners · Done in [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21)
-- [ ] DT-08 · Devices list, forget and nicknames (solo)
+- [x] DT-08 · Devices list, forget and nicknames (solo) · Done in [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24)
 - [ ] UK-01 · CI and real-daemon smoke test · pick up right after DT-08 merges
 - [ ] UK-02 · App shell: navigation rail, pages and styling · after UK-01, before DT-09
 - [ ] UK-03 · Solo end states and Reconnect · after UK-02, before DT-09
@@ -334,9 +334,9 @@ Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 pro
 
 ### UK-04 · Robustness nits
 - **When:** before DT-10. DT-10 adds the redaction layer and reworks pairing flows, so it should start from a clean base.
-- **Files:** `src/features/pair/PairDialog.tsx`, `src/features/session/RejoinBanner.tsx`, `src-tauri/src/events/hub.rs`, `src-tauri/build.rs`, plus the matching tests.
+- **Files:** `src/features/pair/PairDialog.tsx`, `src/features/devices/DeviceList.tsx`, `DeviceDetail.tsx`, `src/features/session/RejoinBanner.tsx`, `src-tauri/src/events/hub.rs`, `src-tauri/build.rs`, plus the matching tests.
 - **Tests first:**
-  1. A rejected `invoke` in `PairDialog` shows "Couldn't reach the Setu service. Try again." and re-enables Connect. Today it sticks on "Connecting…".
+  1. A rejected `invoke` in `PairDialog` shows "Couldn't reach the Setu service. Try again." and re-enables Connect. Today it sticks on "Connecting…". The same applies to `DeviceList`'s `list()` (show the list error with Refresh) and `DeviceDetail`'s `setNickname()` (show the save error); both are DT-08 nits.
   2. If `RejoinBanner`'s timeout fires 1 ms before `since + 10 s`, it re-arms and holding still appears. Add the redraw tick to the effect deps.
   3. The hub emits `Unavailable` once per loss, not on every 1 s failed retry (`hub.rs` connect, subscribe and list error paths).
   4. `build.rs` finds `WebView2Loader.dll`'s target dir by walking `OUT_DIR` ancestors to the directory named `$PROFILE`, not a fixed 4 levels, so older Cargo layouts work.
