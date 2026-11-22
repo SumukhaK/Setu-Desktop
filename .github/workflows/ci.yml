@@ -103,6 +103,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: setu-sdk/core/go.mod
+          cache: false
       - name: Build the SDK binaries
         run: mkdir -p "$RUNNER_TEMP/setu-bin" && cd setu-sdk/core && go build -o "$RUNNER_TEMP/setu-bin" ./cmd/setu ./cmd/setu-daemon
       - name: Run the real-daemon smoke test
