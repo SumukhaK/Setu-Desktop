@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import type { DaemonPort, DaemonStatus } from "./daemon/status";
+import type { DevicesPort } from "./features/devices/devicesPort";
 import type { AdbPort } from "./features/adb/adbStatus";
 import type { ConnectOutcome, PairPort } from "./features/pair/pairPort";
 import type { SessionPort } from "./features/session/sessionPort";
@@ -233,5 +234,30 @@ describe("App rejoin banner and denial (P14)", () => {
     });
     expect(screen.queryByRole("article")).toBeNull();
     expect(screen.queryByText(/Phone connection interrupted/)).toBeNull();
+  });
+});
+
+describe("App saved devices", () => {
+  it("renders the Saved devices section only when a devices port is given", async () => {
+    const devicesPort: DevicesPort = {
+      list: vi.fn(() => Promise.resolve({ outcome: "listed", devices: [] })),
+      forget: vi.fn(() => Promise.resolve({ outcome: "forgotten" })),
+      setNickname: vi.fn(() => Promise.resolve({ outcome: "saved", nickname: null })),
+      connect: vi.fn(() =>
+        Promise.resolve({
+          outcome: "connected",
+          session_id: "s1",
+          device_id: "pixel-7",
+          adb_addr: "127.0.0.1:41377",
+        }),
+      ),
+      cancelConnect: vi.fn(() => Promise.resolve(true)),
+    };
+
+    const { rerender } = render(<App port={daemonPort} hubPort={hubPort} />);
+    expect(screen.queryByRole("heading", { name: "Saved devices" })).toBeNull();
+
+    rerender(<App port={daemonPort} hubPort={hubPort} devicesPort={devicesPort} />);
+    expect(await screen.findByRole("heading", { name: "Saved devices" })).toBeInTheDocument();
   });
 });

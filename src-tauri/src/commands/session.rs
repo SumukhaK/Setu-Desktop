@@ -1,5 +1,6 @@
 //! Solo pairing: re-validate the code, own the in-flight request, map errors.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::sync::PoisonError;
 
@@ -47,6 +48,8 @@ pub enum ConnectOutcome {
     AlreadyPending,
     BadCode,
     Unavailable,
+    NotPaired,
+    Revoked,
     Cancelled,
     Failed {
         code: Option<i64>,
@@ -54,20 +57,38 @@ pub enum ConnectOutcome {
 }
 
 #[derive(Default)]
-pub struct PendingConnect(Mutex<Option<oneshot::Sender<()>>>);
+pub struct PendingConnect {
+    slot: Mutex<Option<(u64, oneshot::Sender<()>)>>,
+    next_token: AtomicU64,
+}
 
 /// Clear the slot on every exit path, including cancellation and errors.
-struct SlotGuard<'a>(&'a PendingConnect);
+struct SlotGuard<'a> {
+    pending: &'a PendingConnect,
+    token: u64,
+}
 
 impl Drop for SlotGuard<'_> {
     fn drop(&mut self) {
+        // Stub: the token check arrives with the implementation.
         let _ = self
-            .0
-             .0
+            .pending
+            .slot
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
     }
+}
+
+fn claim_slot(pending: &PendingConnect) -> Option<(oneshot::Receiver<()>, u64)> {
+    let token = pending.next_token.fetch_add(1, Ordering::Relaxed) + 1;
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let mut slot = pending.slot.lock().unwrap_or_else(PoisonError::into_inner);
+    if slot.is_some() {
+        return None;
+    }
+    *slot = Some((token, cancel_tx));
+    Some((cancel_rx, token))
 }
 
 pub async fn connect_with_code(
@@ -81,15 +102,10 @@ pub async fn connect_with_code(
     let Some(client) = client else {
         return ConnectOutcome::NotReady;
     };
-    let (cancel_tx, cancel_rx) = oneshot::channel();
-    {
-        let mut slot = pending.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.is_some() {
-            return ConnectOutcome::AlreadyPending;
-        }
-        *slot = Some(cancel_tx);
-    }
-    let _guard = SlotGuard(pending);
+    let Some((cancel_rx, token)) = claim_slot(pending) else {
+        return ConnectOutcome::AlreadyPending;
+    };
+    let _guard = SlotGuard { pending, token };
 
     let result = client
         .call_cancellable(
@@ -112,6 +128,16 @@ pub async fn connect_with_code(
         Err(SetuError::Cancelled) => ConnectOutcome::Cancelled,
         Err(error) => ConnectOutcome::Failed { code: error.code() },
     }
+}
+
+/// Reconnect a pinned device by its exact id, sharing the pending slot with
+/// the pairing-code flow so the two can never run together.
+pub async fn connect_with_device(
+    _client: Option<RpcClient>,
+    _device_id: &str,
+    _pending: &PendingConnect,
+) -> ConnectOutcome {
+    ConnectOutcome::NotReady
 }
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
@@ -150,13 +176,13 @@ pub async fn stop_session(client: Option<RpcClient>, session_id: &str) -> StopOu
 }
 
 pub fn cancel_pending(pending: &PendingConnect) -> bool {
-    let sender = pending
-        .0
+    let claimed = pending
+        .slot
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take();
-    match sender {
-        Some(sender) => sender.send(()).is_ok(),
+    match claimed {
+        Some((_, sender)) => sender.send(()).is_ok(),
         None => false,
     }
 }
@@ -216,6 +242,36 @@ mod tests {
         let failed = serde_json::to_value(StopOutcome::Failed { code: Some(-32603) }).unwrap();
         assert_eq!(failed["outcome"], "failed");
         assert_eq!(failed["code"], -32603);
+    }
+
+    #[test]
+    fn a_stale_guard_does_not_clear_a_newer_slot() {
+        let pending = PendingConnect::default();
+        let (first_tx, _first_rx) = oneshot::channel();
+        let (second_tx, _second_rx) = oneshot::channel();
+        *pending.slot.lock().unwrap() = Some((1, first_tx));
+        *pending.slot.lock().unwrap() = Some((2, second_tx));
+
+        let stale = SlotGuard {
+            pending: &pending,
+            token: 1,
+        };
+        drop(stale);
+
+        let slot = pending.slot.lock().unwrap();
+        assert_eq!(slot.as_ref().map(|(token, _)| *token), Some(2));
+    }
+
+    #[test]
+    fn device_connect_outcome_tags_are_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ConnectOutcome::NotPaired).unwrap()["outcome"],
+            "not_paired"
+        );
+        assert_eq!(
+            serde_json::to_value(ConnectOutcome::Revoked).unwrap()["outcome"],
+            "revoked"
+        );
     }
 
     #[test]
