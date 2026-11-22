@@ -16,7 +16,7 @@ You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket on
 
 **SDK facts this ticket relies on (verified against `core/` at v1.1.0):**
 - `devices.list` returns `{devices: [{id, paired, source}]}`. In Solo, `source` is `"state"` (local pins). The daemon always sends `[]`, never null.
-- `devices.forget {device_id}` deletes the local pin. On success the daemon's response has **no `result` field** (Go `omitempty` on a nil result). `RpcClient::call` already maps a missing result to `Ok(Value::Null)`, so treat any `Ok` as forgotten. An unknown id returns `-32012` (`SetuError::NotPaired`). Forget never touches the phone.
+- `devices.forget {device_id}` deletes the local pin. On success daemon v1.1.0 replies `result: {}` (checked against a live daemon on 2026-11-22). Treat any `Ok`, including a missing `result` (`RpcClient::call` maps that to `Value::Null`), as forgotten. An unknown id returns `-32012` (`SetuError::NotPaired`). Forget never touches the phone.
 - `session.connect {device_id, timeout_ms}` reconnects a pinned device. Errors you must type: `-32011` unavailable (phone offline), `-32012` not paired, `-32014` revoked, `-32022` cancelled.
 - Device ids are opaque strings (the daemon base64-encodes them for its file names). Never normalise, trim or case-fold an id. A nickname is a local label only.
 
@@ -186,7 +186,7 @@ Copy:
 - **Rust, `tests/device_commands.rs` (FakeDaemon):**
   - **P08 Solo:** `devices.list` with two pins plus a stored nickname for one returns both rows in daemon order, one with its nickname. The request has no params.
   - `devices.list` with `[]` → `Listed{[]}`. A malformed result → `Failed{None}`. `-32603` → `Failed{Some(-32603)}`. No client → `NotReady`.
-  - **P17 forget:** the FakeDaemon replies with **no `result` field** (`{"jsonrpc":"2.0","id":N}`). That gives `Forgotten`, sends exactly `{"device_id":"pixel-7"}`, and removes the nickname.
+  - **P17 forget:** the FakeDaemon replies `{}`, and in a second case with no `result` field at all. Both give `Forgotten`; the `{}` case sends exactly `{"device_id":"pixel-7"}`, and removes the nickname.
   - `-32012` → `NotPaired`, and the nickname is removed. `-32603` → `Failed`, and the nickname is kept.
   - `""` and `"a\u{0}b"` → `Invalid` with nothing sent.
   - `set_nickname` never changes the id key: a rename of `"pixel-7"` leaves `devices.list` untouched and stores under `"pixel-7"`.

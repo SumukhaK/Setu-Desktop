@@ -19,6 +19,10 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-06 · Session card and status strip · Done in [#19](https://github.com/SumukhaK/Setu-Desktop/pull/19)
 - [x] DT-07 · Path and rejoin banners · Done in [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21)
 - [ ] DT-08 · Devices list, forget and nicknames (solo)
+- [ ] UK-01 · CI and real-daemon smoke test · pick up right after DT-08 merges
+- [ ] UK-02 · App shell: navigation rail, pages and styling · after UK-01, before DT-09
+- [ ] UK-03 · Solo end states and Reconnect · after UK-02, before DT-09
+- [ ] UK-04 · Robustness nits · before DT-10
 - [ ] DT-09 · Tray and background
 - [ ] DT-10 · Android 11+ debugger pairing
 - [ ] DT-11 · Diagnostics
@@ -242,6 +246,7 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 
 ### DT-12 · Settings: relay, pin, proxy
 - **Files:** `src/features/settings/ConnectionSettings.tsx`, `src-tauri/src/daemon/config.rs`.
+- **Also (2026-11-22 audit, SCREENS D10):** the **Computer name** (`--label`) field. Until this ticket the label comes from `COMPUTERNAME`/`HOSTNAME`.
 - **Tests first:** P16 clarification (validate the pin as 64 hex characters with optional colons; applying restarts only that workspace's daemon after naming the sessions it will end; never silently switches transport).
 - **SDK binding:** daemon flags `--relay`, `--relay-pin`, `--relay-ca`, `--proxy`.
 
@@ -263,6 +268,7 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **SDK binding:** `devices.presence` → `{devices:[{device_id, online, connected_at?, transport?, sessions}]}`; `session.connect {device_id}`.
 
 ### DT-16 · Corporate recovery and end states
+- **Note (2026-11-22 audit):** UK-03 ships the Solo half of the end states (`peer_closed`, `session_expired`, abnormal `session_down`, manual **Reconnect**). DT-16 extends that notice with the corporate codes and SSO routing; it does not rebuild it.
 - **Files:** `src/features/corporate/RecoveryPanel.tsx`, `endStates.ts`.
 - **Tests first:** P11 (extended), P13 (no T−5 warning without an authoritative session deadline, which v1.1.0 does not provide; a credential `expires_at` never triggers it), P10 desktop half (`-32026` / `peer_closed` → "ended on the phone" with `peer_reason` when present, no retry), P22 desktop label setting (the phone shows it under **Connected as (unverified)**).
 - **SDK binding:** `-32014`, `-32015`, `-32016`, `-32017`, `-32018`, `-32025`, `-32026`; `session_expired` and `peer_closed` events.
@@ -271,6 +277,70 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **Files:** `src-tauri/tauri.conf.json` (`bundle.externalBin: ["binaries/setu-daemon"]`), a fetch script that downloads and checksums the `setu-daemon` v1.1.0 release binary per target triple into `src-tauri/binaries/` (not committed), daemon path resolution switched to the sidecar location.
 - **Tests first:** checksum mismatch fails the fetch; the bundled app resolves the sidecar path on each OS (CI matrix or documented manual check).
 - **SDK binding:** none (release assets of `SumukhaK/Setu` v1.1.0).
+
+## 5a. Upkeep tickets (2026-11-22 audit)
+
+Found by the audit of main @ `641d0a3` (DT-01..DT-07) against these tickets, `JOURNEYS.md`, `SCREENS.md`, the prototype and Setu-SDK v1.1.0. The audit also ran the merged Rust core (supervisor, event hub, pairing, stop) against a real `setu-daemon` v1.1.0, relay and phone agent built from tag `v1.1.0`:
+- pairing by code worked, and so did tunnel bytes
+- a 4 s relay outage gave `path_down` then `path_up` on the same tunnel (`relay-tcp`, `outage_ms` 5114)
+- `session.stop`, `devices.list` and `devices.forget` behaved as specified
+
+Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 prompt's `devices.forget` reply. Same rules as DT tickets: tests first, one PR each, gates green.
+
+### UK-01 · CI and real-daemon smoke test
+- **When:** right after DT-08 merges, before DT-09. Every later ticket then gets Linux and Windows gates and one real-SDK check per PR instead of the reviewer's manual re-run.
+- **Files:**
+  - `.github/workflows/ci.yml`:
+    - an ubuntu job (installs `libwebkit2gtk-4.1-dev`) and a windows-latest MSVC job, each running every npm and cargo gate
+    - an `e2e` ubuntu job that checks out `SumukhaK/Setu` at `v1.1.0` (a read token secret if that repo is private), runs `go build ./cmd/setu ./cmd/setu-daemon`, and runs the smoke test
+  - `src-tauri/tests/e2e_real_daemon.rs`.
+- **Tests first:** `e2e_real_daemon.rs` returns early (passes) unless `SETU_E2E_BIN_DIR` is set. With it set, it:
+  1. starts `setu relay` and `setu device --adbd <in-test echo server>` on free loopback ports
+  2. starts the Solo `Supervisor` with the real daemon, then `events::start`
+  3. pairs with `connect_with_code` using the agent's `pairing_code` line
+  4. sends one 24-byte ADB `CNXN` header through `adb_addr` and reads the same 24 bytes back (the agent frames ADB packets, so raw bytes do not echo)
+  5. kills the relay for 4 s and restarts it, then asserts the hub forwarded `path_down` then `path_up` for one tunnel id and that bytes still echo
+  6. calls `stop_session`, then asserts `session_down` and `devices.list` length 1
+- **Out of scope:** packaging (DT-17), corporate mode.
+
+### UK-02 · App shell: navigation rail, pages and styling
+- **When:** after UK-01, before DT-09. DT-09 puts **Move to tray** on the Workspace page, and DT-10 to DT-13 each add a page, so the rail must exist first. Today every screen is one unstyled column, and no DT ticket owns the SCREENS.md "Relay sidebar" layout.
+- **Files:**
+  - `src/app/Shell.tsx`: a rail with **Workspace** and **Devices** only; each later ticket adds its own item: Audit log DT-13, Diagnostics DT-11, Settings DT-12. View state lives in `App`, with no router, and `aria-current` marks the current page.
+  - `src/app/WorkspacePage.tsx`: daemon strip, session cards, **Pair new device**.
+  - `src/app/DevicesPage.tsx`: the DT-08 `DeviceList`.
+  - `src/styles/app.css`, ported from the prototype's `styles.css` tokens and layout, imported once by `main.tsx`.
+  - `src-tauri/tauri.conf.json`: add `app.security.devCsp` allowing inline styles **in dev only**; the production CSP stays `style-src 'self'`.
+- **Tests first:**
+  - Switching pages keeps live sessions and the pending pair dialog state, because the hooks stay in `App`.
+  - Only implemented pages appear in the rail.
+  - The status strip stays visible on both pages.
+- **Out of scope:** the workspace switcher (D01 Corporate entry, DT-14), tray (DT-09).
+
+### UK-03 · Solo end states and Reconnect
+- **When:** after UK-02, before DT-09. It needs DT-08's connect-by-id. Today the store collects `ended` sessions but nothing renders them, so pressing **End** on the phone (`peer_closed`) or a dropped session makes the card vanish without a word. SCREENS D07 and P10 need a notice.
+- **Files:**
+  - `src/state/sessionStore.ts`: `EndedSession` gains `peerReason: string | null` from `peer_closed.peer_reason`.
+  - `src/features/session/EndedNotice.tsx` and its test.
+  - `App`/`WorkspacePage` wiring.
+- **Tests first:**
+  - Each ended session shows one notice, with **Dismiss**:
+    - `peer_closed` → "Ended on the phone" plus `peer_reason` when present, with no automatic retry
+    - `session_expired` → "Session time limit reached"
+    - abnormal `session_down` → "Connection to the phone ended unexpectedly"
+    - a normal close shows nothing
+  - **Reconnect** calls DT-08's `connect(deviceId)` and is hidden when `deviceId` is null or the device already has a live session.
+- **Out of scope:** corporate codes `-32014`..`-32018` and SSO (DT-16).
+
+### UK-04 · Robustness nits
+- **When:** before DT-10. DT-10 adds the redaction layer and reworks pairing flows, so it should start from a clean base.
+- **Files:** `src/features/pair/PairDialog.tsx`, `src/features/session/RejoinBanner.tsx`, `src-tauri/src/events/hub.rs`, `src-tauri/build.rs`, plus the matching tests.
+- **Tests first:**
+  1. A rejected `invoke` in `PairDialog` shows "Couldn't reach the Setu service. Try again." and re-enables Connect. Today it sticks on "Connecting…".
+  2. If `RejoinBanner`'s timeout fires 1 ms before `since + 10 s`, it re-arms and holding still appears. Add the redraw tick to the effect deps.
+  3. The hub emits `Unavailable` once per loss, not on every 1 s failed retry (`hub.rs` connect, subscribe and list error paths).
+  4. `build.rs` finds `WebView2Loader.dll`'s target dir by walking `OUT_DIR` ancestors to the directory named `$PROFILE`, not a fixed 4 levels, so older Cargo layouts work.
+- **Out of scope:** behaviour changes beyond these four.
 
 ---
 
