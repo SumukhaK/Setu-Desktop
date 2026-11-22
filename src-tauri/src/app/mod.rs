@@ -15,13 +15,15 @@ mod shell {
     use tauri::{Emitter, Manager};
 
     use crate::app::status::{resolve_daemon_path, resolve_relay, status_of, AppStatus};
+    use crate::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
     use crate::events::{start as start_event_hub, EventHub};
 
     struct AppState {
         status: Mutex<AppStatus>,
-        _supervisor: Option<Supervisor>,
+        supervisor: Option<Supervisor>,
         hub: Option<EventHub>,
+        pending: PendingConnect,
     }
 
     fn lock_status(state: &AppState) -> MutexGuard<'_, AppStatus> {
@@ -40,6 +42,25 @@ mod shell {
         }
     }
 
+    #[tauri::command]
+    async fn session_connect_code(
+        code: String,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<ConnectOutcome, String> {
+        let client = state.supervisor.as_ref().and_then(|supervisor| {
+            match &*supervisor.subscribe().borrow() {
+                DaemonState::Ready { client, .. } => Some(client.clone()),
+                _ => None,
+            }
+        });
+        Ok(connect_with_code(client, &code, &state.pending).await)
+    }
+
+    #[tauri::command]
+    fn session_cancel_connect(state: tauri::State<'_, AppState>) -> bool {
+        cancel_pending(&state.pending)
+    }
+
     /// Start the window and, when a relay is configured, the Solo supervisor.
     ///
     /// Dropping the app never stops the daemon (P17); DT-09 adds tray and quit.
@@ -52,7 +73,12 @@ mod shell {
                     let _ = window.set_focus();
                 }
             }))
-            .invoke_handler(tauri::generate_handler![daemon_status, session_resync])
+            .invoke_handler(tauri::generate_handler![
+                daemon_status,
+                session_resync,
+                session_connect_code,
+                session_cancel_connect
+            ])
             .setup(|app| {
                 let relay = resolve_relay(
                     std::env::var("SETU_RELAY_URL").ok(),
@@ -104,8 +130,9 @@ mod shell {
                 });
                 app.manage(AppState {
                     status: Mutex::new(initial),
-                    _supervisor: supervisor,
+                    supervisor,
                     hub: hub_pair.as_ref().map(|(hub, _)| hub.clone()),
+                    pending: PendingConnect::default(),
                 });
 
                 if let Some((_, mut messages)) = hub_pair {
