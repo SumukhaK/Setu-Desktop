@@ -173,26 +173,28 @@ fn cnxn_header() -> [u8; 24] {
     header
 }
 
-async fn try_roundtrip(addr: SocketAddr) -> bool {
-    let Ok(Ok(mut stream)) = timeout(STEP, AsyncTcpStream::connect(addr)).await else {
-        return false;
-    };
-    let header = cnxn_header();
-    if !matches!(timeout(STEP, stream.write_all(&header)).await, Ok(Ok(()))) {
-        return false;
-    }
-    let mut reply = [0u8; 24];
-    matches!(
-        timeout(STEP, stream.read_exact(&mut reply)).await,
-        Ok(Ok(_)) if reply == header
-    )
+/// Path events are per tunnel, and a tunnel exists only while an ADB TCP
+/// connection to `adb_addr` is open. Keep one connection open across the
+/// outage, as adb does, or the daemon has no tunnel to report as down.
+async fn open_tunnel(addr: SocketAddr) -> AsyncTcpStream {
+    timeout(STEP, AsyncTcpStream::connect(addr))
+        .await
+        .expect("connect to adb_addr in time")
+        .expect("connect to adb_addr")
 }
 
-async fn roundtrip(addr: SocketAddr) {
-    assert!(
-        try_roundtrip(addr).await,
-        "the tunnel must echo the 24-byte header"
-    );
+async fn roundtrip(stream: &mut AsyncTcpStream) {
+    let header = cnxn_header();
+    timeout(STEP, stream.write_all(&header))
+        .await
+        .expect("write the header in time")
+        .expect("write the header");
+    let mut reply = [0u8; 24];
+    timeout(STEP, stream.read_exact(&mut reply))
+        .await
+        .expect("read the echo in time")
+        .expect("read the echo");
+    assert_eq!(reply, header, "the tunnel must echo the 24-byte header");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -321,7 +323,8 @@ async fn run(bin_dir: PathBuf) {
     .await
     .expect("Listening and SessionUp for the paired session");
 
-    roundtrip(addr).await;
+    let mut tunnel = open_tunnel(addr).await;
+    roundtrip(&mut tunnel).await;
 
     // The relay disappears for four seconds, then returns on the same port.
     relay.take().expect("a running relay");
@@ -358,7 +361,8 @@ async fn run(bin_dir: PathBuf) {
     })
     .await
     .expect("PathDown then PathUp on one tunnel id");
-    roundtrip(addr).await;
+    roundtrip(&mut tunnel).await;
+    drop(tunnel);
 
     let stopped = timeout(STEP, stop_session(ready_client(&supervisor), &session_id))
         .await
