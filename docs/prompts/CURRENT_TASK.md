@@ -1,198 +1,197 @@
-# Builder prompt · DT-04 · Solo pairing form with cancel
+# Builder prompt · DT-05 · Local ADB adapter
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
-1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-11). This ticket adds AD-12 (§3). The reviewer writes it into memory after merge.
-2. `docs/TDD_TICKETS.md` §4 (stack) and §5 "DT-04".
-3. `docs/JOURNEYS.md` rows P02, P03 and P19.
-4. `docs/SCREENS.md` row D02 (Pair new device sheet).
-5. Setu-SDK v1.1.0 `API_SPEC.md` §2.1 (`session.connect`, `session.cancel`), §2.3 (errors) and §2.4 (the cancel example): https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
-6. Existing code you'll use: `src-tauri/src/rpc/client.rs` (`RpcClient`), `src-tauri/src/events/model.rs` (`SessionInfo`), `src-tauri/src/app/mod.rs` (the `shell` module), `src/state/useSessions.ts`, `src/platform/tauri.ts`.
+1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-12). This ticket adds AD-13 (§3). The reviewer writes it into memory after merge.
+2. `docs/TDD_TICKETS.md` §4 (stack) and §5 "DT-05".
+3. `docs/JOURNEYS.md`: the "Integration" step about **Connect ADB**, and row P09. This ticket covers only the ADB half of P09; transport and path are DT-06.
+4. `docs/SCREENS.md` row D04: ADB is a separate fact from the listener.
+5. The ADB host protocol (`host:track-devices-l`, 4-hex length framing, `OKAY`/`FAIL`): https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/dev/protocol.md and `SERVICES.TXT` in the same repo. Also the `adb connect` CLI: https://developer.android.com/tools/adb
+6. Existing code you'll use: `src-tauri/src/app/mod.rs` (`mod shell`), `src/state/useSessions.ts` (`LiveSession.adbAddr`), `src/platform/tauri.ts`, `src/daemon/status.ts` (the subscribe-then-read hook pattern).
 
 ## 1. Goal
 
-From the main window, the user opens **Pair new device** and types or pastes the ten-digit code shown on the phone. The code is shown as `NNNN-NNNNNN`, leading zeroes kept. They submit it, and Rust calls `session.connect {pairing_code, timeout_ms: 60000}` on the supervisor's connection.
-- **Success:** the dialog closes. The live session then appears through the DT-03b store ("1 live session").
-- **Wrong code (`-32013`):** one combined message.
-- **Unreachable (`-32011`):** an unavailable message.
-- **Cancel while pending:** sends `session.cancel {request_id}` for that exact JSON-RPC request. The connect resolves with `-32022`, and the dialog closes with no error (P19).
+The app watches the local ADB server at `127.0.0.1:5037` with `host:track-devices-l` and pushes a secret-free snapshot of **loopback** ADB devices to the UI. Under each live session, the UI shows that session's loopback address and its ADB state, matched by **exact** serial:
+- `device` → "ADB attached"
+- `unauthorized` → "Allow USB debugging on the phone"
+- `offline` → "ADB sees the phone offline. Try Connect ADB again."
+- not listed → "ADB not attached"
+- ADB server unreachable → "ADB server isn't running"
 
-The code is never logged, persisted or put in a type that derives `Debug`. There's no device list (DT-08), no `device_id` reconnect UI, no `pair_adb` (DT-10), no styling, and no change to the prototype.
+A **Connect ADB** button runs `adb connect <adb_addr>` in Rust. The session line stays visible whatever ADB says (listener independence, P09). If the ADB server restarts, the watcher reconnects by itself. There's no session card or transport (DT-06), no rejoin banners (DT-07), no Diagnostics page (DT-11), no styling, and no change to the prototype.
 
 ## 2. Files (create or change only these)
 
 ```
-src-tauri/src/rpc/client.rs              + call_cancellable (§3); split request_once into send + await, no behaviour change for call()
-src-tauri/tests/rpc_client.rs            + cancellable-call tests
-src-tauri/tests/support/fake_daemon.rs   + reply_error_delayed(method, error, delay)
-src-tauri/src/lib.rs                     + pub mod commands;
-src-tauri/src/commands/mod.rs            re-exports
-src-tauri/src/commands/session.rs        PairingCode, ConnectOutcome, PendingConnect, connect_with_code, cancel_pending (no tauri import)
-src-tauri/tests/session_commands.rs      integration tests with FakeDaemon
-src-tauri/src/app/mod.rs                 inside `mod shell`: keep the Supervisor handle usable, two tauri commands (§3)
-src/features/pair/codeFormat.ts          parseCodeInput()
-src/features/pair/codeFormat.test.ts
-src/features/pair/pairPort.ts            PairPort, ConnectOutcome (mirrors Rust), outcomeMessage()
-src/features/pair/PairDialog.tsx
-src/features/pair/PairDialog.test.tsx
-src/platform/tauri.ts                    + tauriPairPort (still the only @tauri-apps/api import)
-src/App.tsx, src/main.tsx                "Pair new device" button toggles <PairDialog />; pass pairPort
-src/App.test.tsx                         App opens and closes the dialog
+src-tauri/Cargo.toml                       + [[bin]] fake-adb (tests/support/fake_adb.rs, test = false, doc = false)
+src-tauri/src/lib.rs                       + pub mod adb;
+src-tauri/src/adb/mod.rs                   re-exports
+src-tauri/src/adb/protocol.rs              encode_request, FrameReader, parse_device_list, is_loopback_serial (pure)
+src-tauri/src/adb/track.rs                 AdbSnapshot, AdbDevice, start(server) -> (AdbWatcher, watch::Receiver<AdbSnapshot>)
+src-tauri/src/adb/connect.rs               resolve_adb_path, resolve_adb_server, AdbConnectOutcome, parse_connect_output, adb_connect
+src-tauri/tests/support/fake_adb_server.rs FakeAdbServer (below)
+src-tauri/tests/support/fake_adb.rs        fake `adb` binary driven by env vars
+src-tauri/tests/adb_track.rs
+src-tauri/tests/adb_connect.rs
+src-tauri/src/app/mod.rs                   inside `mod shell`: start the watcher, emit "adb-status", commands adb_status and adb_connect
+src/features/adb/adbStatus.ts              AdbSnapshot mirror, AdbPort, AdbConnectOutcome mirror, attachmentOf(), attachmentLabel(), connectMessage()
+src/features/adb/adbStatus.test.ts
+src/features/adb/useAdbStatus.ts           subscribe first, then current(); a pushed value wins
+src/features/adb/useAdbStatus.test.tsx
+src/features/adb/SessionAdbLine.tsx        one live session: "<adb_addr> · <label>" + Connect ADB
+src/features/adb/SessionAdbLine.test.tsx
+src/platform/tauri.ts                      + tauriAdbPort (still the only @tauri-apps/api import)
+src/App.tsx, src/main.tsx, src/App.test.tsx render <SessionAdbLine/> per live session under the session count
 ```
 
-Don't change `src-tauri/src/daemon/`, `src-tauri/src/events/`, `docs/`, `README.md` or the prototype (`index.html`, `prototype.js`, `styles.css`). Add no crate and no npm package.
+Don't change `src-tauri/src/rpc/`, `daemon/`, `events/`, `commands/`, `src/state/`, `src/features/pair/`, `docs/`, `README.md` or the prototype. Add no crate and no npm package.
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**AD-12: cancel by request id inside the client.** The JSON-RPC id stays private to `RpcClient`. Callers get cancellation as a signal, not an id.
+**AD-13: local ADB is observed, never trusted from the UI.**
+- Only loopback serials cross the bridge: `127.0.0.1:<port>`, `[::1]:<port>` or `localhost:<port>`. USB serials and emulator names never leave Rust.
+- `adb connect` runs only in Rust, and only for a loopback `SocketAddr`.
+- Attachment is decided only by an exact serial match with state `device`.
+
+**Protocol (`protocol.rs`, pure).**
+- `encode_request(service: &str) -> Vec<u8>`: a 4-digit lowercase hex length, then the bytes. For example, `"0014host:track-devices-l"`.
+- `FrameReader`: feed bytes and get back complete payloads. Each payload is a 4-hex-digit length followed by that many bytes, and an empty payload (`"0000"`) is valid. A non-hex length is a protocol error, which closes the connection.
+- `parse_device_list(payload: &str) -> Vec<AdbDevice>`:
+  - Each non-empty line is split on ASCII whitespace. Token 0 is the serial and token 1 is the state.
+  - States are raw adb tokens: `device`, `unauthorized`, `offline`, `authorizing`, `connecting`, `no` (from "no permissions"), and so on.
+  - Lines with fewer than 2 tokens are skipped.
+  - Only loopback serials are kept (`is_loopback_serial`).
+
+**Watcher (`track.rs`).**
 
 ```rust
-/// Like `call`, including the one `-32027` retry. If `cancel` fires while a
-/// request is in flight, sends `session.cancel {"request_id": <that id>}` on this
-/// same connection (ignore its result), then keeps awaiting the original reply,
-/// which the daemon answers with -32022 → Err(SetuError::Cancelled).
-/// If `cancel` fires during the busy back-off, return Err(Cancelled) without
-/// sending the retry. A dropped sender (RecvError) means "never cancel".
-/// Cancel acts at most once.
-pub async fn call_cancellable(&self, method: &str, params: Option<Value>,
-    cancel: oneshot::Receiver<()>) -> Result<Value, SetuError>;
-```
-
-Use the numeric id (`"request_id": 7`). The daemon compacts the raw JSON id, so a number matches. Wait on the reply and the cancel signal with `tokio::select!`. Never drop the pending reply before it resolves.
-
-**`commands/session.rs` (pure Rust, unit- and integration-testable without Tauri).**
-
-```rust
-/// Exactly ^[0-9]{4}-[0-9]{6}$. No Debug, Display, Serialize or Clone. Dropped after the call.
-pub struct PairingCode(String);
-impl PairingCode { pub fn parse(raw: &str) -> Option<PairingCode>; }
+#[derive(Clone, Serialize, PartialEq, Debug)]
+pub struct AdbDevice { pub serial: String, pub state: String }
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
+#[serde(tag = "server", rename_all = "snake_case")]
+pub enum AdbSnapshot { Unknown, Down, Up { devices: Vec<AdbDevice> } }   // devices sorted by serial
+
+pub fn start(server: SocketAddr) -> (AdbWatcher, watch::Receiver<AdbSnapshot>);   // AdbWatcher: Clone; dropping every handle ends the task
+```
+
+The watcher loop:
+1. Connect to `server`.
+2. Write `encode_request("host:track-devices-l")` and read 4 bytes.
+   - `OKAY`: continue.
+   - `FAIL`, or anything else, counts as a failure.
+3. For every payload, publish `Up{devices}` with `send_if_modified`, so an identical list doesn't wake the UI.
+4. On a connect failure, EOF or protocol error, publish `Down` and retry. The backoff starts at 500 ms, doubles and caps at 5 s, and resets after an `OKAY`.
+
+The watcher never starts an ADB server. `resolve_adb_server(env_port: Option<String>) -> SocketAddr` returns `127.0.0.1:<ANDROID_ADB_SERVER_PORT>` when that's a valid u16, else `127.0.0.1:5037`.
+
+**Connect (`connect.rs`).**
+
+```rust
+#[derive(Clone, Serialize, PartialEq, Debug)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum ConnectOutcome {
-    Connected { session_id: String, device_id: String, adb_addr: String },
-    Malformed,          // PairingCode::parse failed; the daemon is never called
-    NotReady,           // no Ready client
-    AlreadyPending,     // a connect is already in flight
-    BadCode,            // -32013
-    Unavailable,        // -32011
-    Cancelled,          // -32022
-    Failed { code: Option<i64> },   // anything else, incl. UnexpectedResult / Disconnected (code None)
+pub enum AdbConnectOutcome { Connected, NotLoopback, Missing, TimedOut, Failed { detail: String } }
+
+pub fn resolve_adb_path(env_override: Option<OsString>) -> PathBuf;   // non-empty SETU_ADB_PATH, else "adb" (PATH lookup)
+pub fn parse_connect_output(stdout: &str, stderr: &str) -> Result<(), String>;
+pub async fn adb_connect(adb: &Path, addr: &str, timeout: Duration) -> AdbConnectOutcome;
+```
+
+- `parse_connect_output`:
+  - Returns `Ok` iff any line of `stdout` (trimmed) starts with `connected to ` or `already connected to `. `adb` often exits 0 even on failure, so don't trust the exit code.
+  - Otherwise returns `Err(detail)`. `detail` is the first non-empty trimmed line of stdout, then of stderr, else `"adb connect failed"`, cut to 200 chars.
+- `adb_connect` handles these cases in order:
+  1. `addr` must parse as a `SocketAddr` with a loopback IP. Otherwise return `NotLoopback` without spawning anything.
+  2. Spawn `adb connect <addr>` with `tokio::process::Command`, stdin null, piped stdout and stderr, and `kill_on_drop(true)`. This is fine here: `adb connect` is short-lived, unlike the daemon.
+  3. A spawn `NotFound` returns `Missing`.
+  4. If it takes longer than `timeout` (the app uses 10 s), return `TimedOut`. The child is killed.
+  5. Otherwise parse the output.
+
+**App shell.**
+- In setup, always start the watcher (it doesn't need a relay) with `resolve_adb_server(env ANDROID_ADB_SERVER_PORT)`.
+- Keep `AdbWatcher` and the receiver in `AppState`.
+- Spawn one forwarder that emits `"adb-status"` with the snapshot on each change, starting with the current value.
+- `#[tauri::command] fn adb_status(state) -> AdbSnapshot` returns the current value.
+- `#[tauri::command] async fn adb_connect(adb_addr: String) -> Result<AdbConnectOutcome, String>` calls `adb_connect(&resolve_adb_path(env SETU_ADB_PATH), &adb_addr, 10 s)` and always returns `Ok`.
+- Register both next to the existing commands.
+
+**UI (AD-9).**
+
+```ts
+export type AdbSnapshot =
+  | { server: "unknown" } | { server: "down" }
+  | { server: "up"; devices: { serial: string; state: string }[] };
+export type AdbConnectOutcome =
+  | { outcome: "connected" } | { outcome: "not_loopback" } | { outcome: "missing" }
+  | { outcome: "timed_out" } | { outcome: "failed"; detail: string };
+export interface AdbPort {
+  current(): Promise<AdbSnapshot>;
+  subscribe(cb: (s: AdbSnapshot) => void): Promise<() => void>;
+  connect(adbAddr: string): Promise<AdbConnectOutcome>;
 }
-
-#[derive(Default)]
-pub struct PendingConnect(std::sync::Mutex<Option<oneshot::Sender<()>>>);
-
-pub async fn connect_with_code(client: Option<RpcClient>, raw: &str, pending: &PendingConnect) -> ConnectOutcome;
-pub fn cancel_pending(pending: &PendingConnect) -> bool;   // true if a pending connect was signalled
+export type Attachment = "attached" | "unauthorized" | "offline" | "absent" | "server_down" | "unknown" | "other";
+export function attachmentOf(adbAddr: string | null, s: AdbSnapshot | null): Attachment;
+export function attachmentLabel(a: Attachment): string;
+export function connectMessage(o: AdbConnectOutcome): string | null;   // null for connected
 ```
 
-`connect_with_code` works in this order:
-1. Parse the code, else return `Malformed`.
-2. Take the client, else return `NotReady`.
-3. Store a cancel sender in the slot. If the slot is occupied, return `AlreadyPending`.
-4. Call `call_cancellable("session.connect", {"pairing_code": <code>, "timeout_ms": 60000}, rx)`.
-5. **Always** clear the slot, on every path (use a small guard).
-6. Map the result:
-   - `Ok`: deserialize `events::SessionInfo` into `Connected`. A bad shape is `Failed{code: None}`.
-   - `BadCode`, `Unavailable` and `Cancelled` map one to one.
-   - Anything else maps to `Failed{code: e.code()}`.
-
-`cancel_pending` takes the sender and sends `()`. It is a no-op returning `false` when nothing is pending. The code and the slot never appear in an error, a log or `ConnectOutcome`.
-
-**`app/mod.rs` (shell).**
-- Keep the `Supervisor` in `AppState` as a usable field, not `_supervisor`. Add `pending: PendingConnect`.
-- `#[tauri::command] async fn session_connect_code(code: String, state) -> ConnectOutcome`. It takes the current client from `supervisor.subscribe().borrow()` when that state is `Ready`, otherwise `None`, then calls `connect_with_code`.
-- `#[tauri::command] fn session_cancel_connect(state) -> bool` calls `cancel_pending`.
-- With no supervisor (NotConfigured), connect returns `NotReady` and cancel returns `false`.
-- Register both commands next to `daemon_status` and `session_resync`. Don't clone the `String` code anywhere else.
-
-**UI (AD-9: features take ports; only `src/platform/tauri.ts` imports Tauri).**
-
-```ts
-// codeFormat.ts
-export interface CodeInput { display: string; code: string | null; problem: "characters" | "length" | null }
-export function parseCodeInput(raw: string): CodeInput;
-```
-
-`parseCodeInput` rules:
-- Trim the input.
-- If it contains anything other than digits, `-` or spaces, return `{display: raw, code: null, problem: "characters"}`.
-- Otherwise strip the separators to get the digits.
-  - More than 10 digits: `problem: "length"`, with `display` = the first 10 digits formatted.
-  - Otherwise `display` = the first 4 digits, then `-` and the rest once there are more than 4.
-- `code` is set (`"NNNN-NNNNNN"`) only when the trimmed input matches `^\d{10}$` or `^\d{4}[- ]\d{6}$`. So `"0012-345678"`, `"0012345678"` and `"0012 345678"` are valid, and `"00-12345678"`, `"0012--345678"`, `"0012-3456"` and `"0012-34567a"` aren't.
-- Leading zeroes are always kept, because codes are strings and never numbers.
-
-```ts
-// pairPort.ts
-export type ConnectOutcome =
-  | { outcome: "connected"; session_id: string; device_id: string; adb_addr: string }
-  | { outcome: "malformed" } | { outcome: "not_ready" } | { outcome: "already_pending" }
-  | { outcome: "bad_code" } | { outcome: "unavailable" } | { outcome: "cancelled" }
-  | { outcome: "failed"; code: number | null };
-export interface PairPort { connect(code: string): Promise<ConnectOutcome>; cancel(): Promise<boolean> }
-export function outcomeMessage(o: ConnectOutcome): string | null;   // null for connected and cancelled
-```
-
-Copy is exact:
-- `bad_code`: "That code didn't work. Check the 10 digits and that the phone is still hosting. After 3 wrong tries the phone shows a new code."
-- `unavailable`: "The phone can't be reached right now. Make sure Setu is hosting on the phone, then try again."
-- `not_ready`: "The Setu service isn't ready yet. Try again in a moment."
-- `already_pending`: "A connection is already in progress."
-- `malformed`: "Enter the 10 digits shown on the phone."
-- `failed`: "Couldn't connect (error N). Try again." When `code` is null: "Couldn't connect. Try again."
-
-`PairDialog({ port, onClose })`:
-- A `role="dialog"` with `aria-labelledby` on the heading "Pair new device".
-- One `<input>` labelled "Pairing code", with `inputMode="numeric"`, `autoComplete="off"` and `spellCheck={false}`. Its value is `parseCodeInput(raw).display`.
-- While `problem` is set, show the inline hint "Use only the 10 digits shown on the phone." and set `aria-invalid`.
-- **Connect** is enabled only when `code !== null` and nothing is pending.
-- While pending:
-  - Show "Connecting…".
-  - Disable the input and Connect.
-  - **Cancel** calls `port.cancel()`.
-- Closing:
-  - With no connect pending, Cancel just calls `onClose()`.
-  - `connected` or `cancelled` calls `onClose()`.
-  - Any other outcome shows `outcomeMessage` in `role="alert"`, keeps the typed code so the user can fix it, and re-enables the form.
-- No timer, countdown or code-expiry text, ever (P03: only the phone's SDK event changes the code).
-- The code lives only in component state: no storage, no URL, no `console`.
-
-`App`: a "Pair new device" button renders `<PairDialog port={pairPort} onClose={…} />`. Keep the DT-03b session line.
+- `attachmentOf`:
+  - A null snapshot or `unknown` gives `"unknown"`.
+  - `down` gives `"server_down"`.
+  - A null `adbAddr` gives `"absent"`.
+  - Otherwise use the device whose `serial === adbAddr` (strict equality, no trimming, no prefix match). Its state `device`, `unauthorized` or `offline` maps directly, and any other state gives `"other"`.
+  - No match gives `"absent"`.
+- Labels are the §1 strings, plus `unknown` → "Checking ADB…" and `other` → "ADB is still connecting to the phone".
+- `connectMessage` copy:
+  - `missing`: "Android Platform Tools (adb) weren't found. Install them or set SETU_ADB_PATH."
+  - `timed_out`: "adb connect didn't answer in 10 seconds. Try again."
+  - `not_loopback`: "Setu only connects ADB to this computer's loopback address."
+  - `failed`: "adb connect failed: <detail>"
+- `SessionAdbLine({ session, adb, port })` shows `<adbAddr ?? "Address pending"> · <label>`.
+  - **Connect ADB** is shown when the attachment isn't `attached`, `unknown` or `server_down`, and `adbAddr` isn't null. It's disabled while a connect is running.
+  - A non-null `connectMessage` goes in `role="alert"`.
+  - After `connected`, show nothing extra. The watcher's next snapshot flips the label.
+- `App` renders one `SessionAdbLine` per `sessions.live` entry, keyed by `sessionId`, and uses `useAdbStatus(adbPort)` once.
 
 ## 4. TDD: write these tests first, see them fail, then implement
 
-- **`tests/rpc_client.rs` (FakeDaemon):**
-  - **Cancel mid-call:**
-    1. Script the `session.connect` reply with `reply_error_delayed` (-32022, kind `cancelled`, 300 ms) and `session.cancel` with `{cancelled:1}`.
-    2. Fire `cancel` after the connect is received.
-    3. The result is `Err(Cancelled)`.
-    4. `received()` shows the `session.cancel` params `{"request_id": <connect's id>}`.
-  - A dropped cancel sender behaves exactly like `call`: the result comes through and no `session.cancel` is sent.
-  - Cancel during the busy back-off: first reply -32027, then fire `cancel`. The result is `Err(Cancelled)`, with exactly one `session.connect` and no `session.cancel` received.
-  - Cancel after the reply has arrived does nothing.
-- **`commands/session.rs` unit tests:**
-  - `PairingCode::parse` accepts `0012-345678` and rejects `0012345678`, `00123-45678`, letters, `""` and 11 digits.
-  - The `ConnectOutcome` serde tags and field names.
-  - `cancel_pending` on an empty slot returns `false`.
-- **`tests/session_commands.rs` (FakeDaemon):**
-  - **P02:** `"0012-345678"` sends exactly `{"pairing_code":"0012-345678","timeout_ms":60000}`, and a scripted `SessionInfo` gives `Connected`.
-  - `Malformed` and `NotReady` send nothing to the daemon.
-  - -32013 → `BadCode` and -32011 → `Unavailable`. -32020 → `Failed{code: Some(-32020)}`.
-  - **P19:** start a connect, then `cancel_pending` returns `true`. The outcome is `Cancelled`, and the `session.cancel` request id equals the connect's id.
-  - A second concurrent connect → `AlreadyPending`, and a connect after the first one finishes is accepted, so the slot was cleared.
-  - Neither the code string nor any `ConnectOutcome` JSON contains the code, except the request params sent to the daemon.
-- **UI (Vitest + Testing Library, with a fake `PairPort`):**
-  - `parseCodeInput` table, covering every example in §3, including leading zeroes and paste of `"0012345678"` → `"0012-345678"`.
-  - **P02:** typing `0012345678` shows `0012-345678`, and Connect calls `port.connect("0012-345678")` once. Letters or a partial code keep Connect disabled and show the hint.
-  - **P19:** with a pending connect that resolves only after `cancel()`, Cancel calls `port.cancel()`, then `cancelled` closes the dialog without an alert.
-  - Each error outcome shows its exact copy in `role="alert"` and keeps the input value.
-  - No element's text matches `/\d+\s*(s|sec|min)|expire/i` (no timer, P03).
-  - `localStorage` and `sessionStorage` are empty after a submit.
-  - **App:** the button opens the dialog and `onClose` hides it.
+- **`protocol.rs` unit tests:**
+  - `encode_request` bytes.
+  - `FrameReader` handles a split length, a split payload, two frames in one chunk, `"0000"`, and a non-hex length as an error.
+  - `parse_device_list` handles the `-l` long format (`"127.0.0.1:41377  device product:x model:Pixel_7 device:panther transport_id:3"`), tab-separated lines, `no permissions`, and blank lines. USB (`"R58M123ABC device"`) and `emulator-5554` are dropped. `127.0.0.1:41377`, `[::1]:5555` and `localhost:5555` are kept.
+- **`tests/adb_track.rs` (FakeAdbServer):**
+  - The request is exactly `0014host:track-devices-l`.
+  - **P09 sequence:** push `""`, then `unauthorized`, `offline` and `device` lines for `127.0.0.1:41377`. Snapshots arrive in that order, and a repeated identical payload produces no extra change.
+  - A `127.0.0.1:4137` / `127.0.0.1:413770` neighbour appears as its own serial, so it isn't merged with the session's.
+  - `FAIL` leads to `Down`.
+  - **Restart:** `close()` gives `Down`. The watcher reconnects within 1.5 s and publishes `Up` from the new connection's first payload.
+  - With no server listening, the snapshot is `Down` and no panic happens.
+  - Dropping the `AdbWatcher` ends the task, so the server sees the connection close.
+- **`tests/adb_connect.rs`** (the `fake-adb` bin reads `FAKE_ADB_STDOUT`, `FAKE_ADB_STDERR`, `FAKE_ADB_EXIT` and `FAKE_ADB_SLEEP_MS`, and writes its argv to `FAKE_ADB_ARGS_FILE`):
+  - "connected to 127.0.0.1:41377" → `Connected`, and the argv is exactly `["connect","127.0.0.1:41377"]`.
+  - "already connected to …" → `Connected`.
+  - "failed to connect to …" with exit 0 → `Failed{detail}`, with the detail at most 200 chars.
+  - A sleep past the timeout (use 300 ms in the test) → `TimedOut`.
+  - A nonexistent path → `Missing`.
+  - `"10.0.0.2:5555"` and `"pixel-7"` → `NotLoopback`, and the args file isn't created.
+  - Unit tests for `resolve_adb_path`, `resolve_adb_server` and `parse_connect_output`.
+- **UI (Vitest, with a fake `AdbPort`):**
+  - `attachmentOf` table: every state, server down, unknown, a null address, an exact match versus `127.0.0.1:4137` and `127.0.0.1:413770`, and a `" 127.0.0.1:41377"` with a leading space, which doesn't match.
+  - Every label and every `connectMessage` string.
+  - `useAdbStatus`: subscribe happens before `current()`, a pushed snapshot beats a late `current()`, and unmount unsubscribes.
+  - `SessionAdbLine`: walk absent → unauthorized → offline → device by pushing snapshots. The label changes each time, and **Connect ADB** disappears at attached. Clicking it calls `port.connect("127.0.0.1:41377")` once and shows each outcome's copy.
+  - **App:** with ADB `down`, the live session line is still rendered with "ADB server isn't running" (listener independence).
+
+**FakeAdbServer** (`tests/support/fake_adb_server.rs`):
+- `start()` binds `127.0.0.1:0` and accepts connections one after another.
+- `addr()`.
+- `requests()` gives the raw request strings received.
+- `reply_fail()` answers the next request with `FAIL` + framed message.
+- `push(payload)` frames and sends the payload on the current connection.
+- `close()` drops the current connection and keeps listening.
+- `wait_for_connections(n)`.
 
 ## 5. Gates (all must pass before you push)
 
@@ -211,31 +210,31 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Also run `npm run tauri dev` once with a real `setu-daemon` v1.1.0 (`SETU_RELAY_URL`, `SETU_DAEMON_PATH`).
-- Confirm that a malformed code can't be submitted.
-- Confirm that submitting a well-formed code with no phone hosting ends in an error message or a pending state, and that Cancel then closes the dialog cleanly.
-- If you can pair a real phone, confirm that "1 live session" appears. Otherwise say so; it isn't required.
-- Name the OS.
+Also run `npm run tauri dev` once with Platform Tools installed.
+1. Confirm "ADB server isn't running" after `adb kill-server`.
+2. Confirm it recovers after `adb start-server` without restarting the app.
+3. With a real paired session if you have one: **Connect ADB** → "ADB attached".
+4. Without a phone, run `adb connect 127.0.0.1:1` by hand to show that the failure copy appears.
+5. Name the OS.
 
-Use no `#[allow(...)]`, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no `unwrap()` or `expect()` outside tests (the existing `expect("pending calls")` lock calls in `client.rs` may stay), and no clippy or lint downgrades. If a gate fails for a reason you can't fix in code, stop and report the exact error.
+Use no `#[allow(...)]`, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no `unwrap()` or `expect()` outside tests, and no clippy or lint downgrades. If a gate fails for a reason you can't fix in code, stop and report the exact error.
 
 ## 6. Architecture and Karpathy pillars (enforced at review)
 
-- **Rust/React separation.** The JSON-RPC id, the connection and the error objects stay in Rust. React sends the formatted code once and gets back only a `ConnectOutcome`. Rust re-validates the code and never trusts the UI's formatting.
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If the daemon behaves differently from §2.4 (for example, the cancel answers `{cancelled:0}` because the connect already finished), handle it the way §3 describes and record it there.
-2. **Simplicity first.** One slot, one dialog, no router, no form library, no state library, no styling. Keep files under ~250–300 lines.
-3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-04-pair-dialog`. Make atomic conventional commits:
-   - `refactor(desktop): …` for the `request_once` split, with existing tests green
+- **Rust/React separation.** Sockets, process spawning, adb output parsing and the loopback filter stay in Rust. React gets a loopback-only snapshot and a typed outcome. It never sends anything to adb except an address that Rust re-validates.
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If real `adb` output or the track-devices format differs from §3 on your machine, follow the real behaviour, add a test for it and record it.
+2. **Simplicity first.** One watcher task, one connect function. No adb client crate, no device-list UI, no polling of `adb devices` (track-devices pushes). Keep files under ~250–300 lines.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-05-local-adb`. Make atomic conventional commits:
    - `test(desktop): …` red
    - `feat(desktop): …` green
 4. **Goal-driven TDD.** Commit the failing tests first, then the implementation. Paste the red excerpt and the full green output of every gate in the PR.
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `feat(desktop): DT-04 solo pairing form with cancel`, with this body:
+Open one PR against `main` titled `feat(desktop): DT-05 local ADB adapter`, with this body:
 
 ```
-Ticket: DT-04 (docs/TDD_TICKETS.md §5) · Acceptance: P02, P03, P19
+Ticket: DT-05 (docs/TDD_TICKETS.md §5) · Acceptance: P09 (ADB half: absent → unauthorized → offline → device, exact serial, listener independent)
 
 ## Assumptions & Trade-offs
 - …
@@ -247,10 +246,10 @@ Ticket: DT-04 (docs/TDD_TICKETS.md §5) · Acceptance: P02, P03, P19
 OS: …
 <red run excerpt>
 <full green output of every gate>
-<tauri dev manual check: malformed blocked, pending + Cancel, (1 live session if a phone was paired)>
+<tauri dev manual check: kill-server → "ADB server isn't running", start-server → recovers, Connect ADB result>
 
 ## Out of scope (left for later tickets)
-- local ADB attach (DT-05), session card (DT-06), device list and device_id reconnect (DT-08), Android debugger pairing (DT-10)
+- session card, transport and path (DT-06), rejoin banners (DT-07), Diagnostics page and doctor adb check (DT-11), sidecar adb bundling (DT-17)
 ```
 
-Then **stop immediately**. Don't start DT-05, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start DT-06, don't edit `docs/`, and don't merge.
