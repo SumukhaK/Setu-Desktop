@@ -24,6 +24,9 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 const STEP: Duration = Duration::from_secs(15);
+// The SDK's default dead-peer detection is 20 s before a path_down, so a hub
+// wait needs to span that window rather than just the relay outage itself.
+const HUB_WAIT: Duration = Duration::from_secs(30);
 const WHOLE: Duration = Duration::from_secs(55);
 
 fn free_port() -> u16 {
@@ -148,12 +151,10 @@ fn ready_client(supervisor: &Supervisor) -> Option<RpcClient> {
 }
 
 async fn next_hub(rx: &mut mpsc::UnboundedReceiver<HubMessage>) -> HubMessage {
-    let message = timeout(STEP, rx.recv())
+    timeout(HUB_WAIT, rx.recv())
         .await
         .expect("a hub message in time")
-        .expect("the hub channel is open");
-    println!("hub: {message:?}");
-    message
+        .expect("the hub channel is open")
 }
 
 fn cnxn_header() -> [u8; 24] {
@@ -322,24 +323,13 @@ async fn run(bin_dir: PathBuf) {
 
     roundtrip(addr).await;
 
-    // Let the freshly paired tunnel settle before breaking the relay; a kill
-    // during the initial handshake would be a connect failure, not an outage.
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
     // The relay disappears for four seconds, then returns on the same port.
     relay.take().expect("a running relay");
     tokio::time::sleep(Duration::from_secs(4)).await;
     let _relay_after_outage = start_relay(&bin_dir, relay_port, &relay_state);
 
-    // Traffic exercises the rejoined path; without it a quiet tunnel can stay
-    // silent until its next keepalive, well past this smoke test's budget.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !try_roundtrip(addr).await && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-
     let mut down_tunnel: Option<String> = None;
-    timeout(Duration::from_secs(20), async {
+    timeout(Duration::from_secs(35), async {
         loop {
             match next_hub(&mut messages).await {
                 HubMessage::Event {
