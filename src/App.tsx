@@ -1,15 +1,15 @@
 import { useState } from "react";
 
-import { StatusStrip } from "./daemon/StatusStrip";
+import { DevicesPage } from "./app/DevicesPage";
+import { Shell } from "./app/Shell";
+import type { Page } from "./app/Shell";
+import { WorkspacePage } from "./app/WorkspacePage";
 import type { DaemonPort } from "./daemon/status";
 import type { AdbPort } from "./features/adb/adbStatus";
-import { DeviceList } from "./features/devices/DeviceList";
-import type { DevicesPort } from "./features/devices/devicesPort";
 import { useAdbStatus } from "./features/adb/useAdbStatus";
-import { PairDialog } from "./features/pair/PairDialog";
-import { SessionCard } from "./features/session/SessionCard";
-import type { SessionPort } from "./features/session/sessionPort";
+import type { DevicesPort } from "./features/devices/devicesPort";
 import type { PairPort } from "./features/pair/pairPort";
+import type { SessionPort } from "./features/session/sessionPort";
 import { systemClock } from "./state/clock";
 import type { Clock } from "./state/clock";
 import { useSessions } from "./state/useSessions";
@@ -44,54 +44,36 @@ export function App({
   const sessions = useSessions(hubPort, clock);
   const adb = useAdbStatus(adbPort ?? null);
   const [pairing, setPairing] = useState(false);
-  const count = Object.keys(sessions.live).length;
-  const line =
-    count === 0 ? "No live sessions" : `${String(count)} live session${count === 1 ? "" : "s"}`;
+  const [page, setPage] = useState<Page>("workspace");
+  const live = Object.values(sessions.live);
 
   return (
-    <main className="app">
-      <header className="app-header">
-        <h1>Setu</h1>
-      </header>
-      <StatusStrip port={port} />
-      <p>{line}</p>
-      {Object.values(sessions.live).map((session) => (
-        <SessionCard
-          key={session.sessionId}
-          session={session}
+    <Shell
+      page={page}
+      onNavigate={setPage}
+      items={devicesPort === undefined ? ["workspace"] : ["workspace", "devices"]}
+    >
+      {page === "workspace" ? (
+        <WorkspacePage
+          port={port}
+          sessions={live}
           adb={adb}
           clock={clock}
           adbPort={adbPort ?? null}
           sessionPort={stopPort}
           clipboard={targetClipboard}
+          pairPort={pairPort}
+          pairing={pairing}
+          onPair={() => {
+            setPairing(true);
+          }}
+          onPairingClose={() => {
+            setPairing(false);
+          }}
         />
-      ))}
-      {devicesPort !== undefined && (
-        <DeviceList
-          port={devicesPort}
-          liveDeviceIds={Object.values(sessions.live).map((session) => session.deviceId)}
-        />
-      )}
-      {pairPort !== undefined && (
-        <>
-          <button
-            type="button"
-            onClick={() => {
-              setPairing(true);
-            }}
-          >
-            Pair new device
-          </button>
-          {pairing && (
-            <PairDialog
-              port={pairPort}
-              onClose={() => {
-                setPairing(false);
-              }}
-            />
-          )}
-        </>
-      )}
-    </main>
+      ) : devicesPort !== undefined ? (
+        <DevicesPage port={devicesPort} liveDeviceIds={live.map((session) => session.deviceId)} />
+      ) : null}
+    </Shell>
   );
 }

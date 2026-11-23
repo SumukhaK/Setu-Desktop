@@ -55,32 +55,40 @@ export function SessionCard({
   }
 
   return (
-    <article aria-labelledby={headingId}>
+    <article aria-labelledby={headingId} className="card session-card">
       <h2 id={headingId}>{session.deviceId}</h2>
       <RejoinBanner session={session} adb={adb} clock={clock} />
       <StatusStrip session={session} adb={adb} />
       <SessionAdbLine session={session} adb={adb} port={adbPort} />
-      {session.adbAddr !== null && (
+      <div className="session-actions">
+        {session.adbAddr !== null && (
+          <button
+            type="button"
+            className="button quiet"
+            onClick={() => {
+              void copyAddress();
+            }}
+          >
+            Copy address
+          </button>
+        )}
+        {copied && <p>Copied</p>}
         <button
           type="button"
+          className="button quiet danger"
+          disabled={pending}
           onClick={() => {
-            void copyAddress();
+            void disconnect();
           }}
         >
-          Copy address
+          Disconnect
         </button>
-      )}
-      {copied && <p>Copied</p>}
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => {
-          void disconnect();
-        }}
-      >
-        Disconnect
-      </button>
-      {message !== null && <p role="alert">{message}</p>}
+        {message !== null && (
+          <p role="alert" className="notice">
+            {message}
+          </p>
+        )}
+      </div>
     </article>
   );
 }

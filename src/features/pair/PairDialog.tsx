@@ -36,42 +36,56 @@ export function PairDialog({ port, onClose }: { port: PairPort; onClose: () => v
   }
 
   return (
-    <div role="dialog" aria-labelledby="pair-title">
-      <h2 id="pair-title">Pair new device</h2>
-      <label htmlFor="pair-code">Pairing code</label>
-      <input
-        id="pair-code"
-        value={parsed.display}
-        onChange={(event) => {
-          setRaw(event.target.value);
-          setMessage(null);
-        }}
-        inputMode="numeric"
-        autoComplete="off"
-        spellCheck={false}
-        disabled={connecting}
-        aria-invalid={parsed.problem !== null}
-      />
-      {parsed.problem !== null && <p>Use only the 10 digits shown on the phone.</p>}
-      {message !== null && <p role="alert">{message}</p>}
-      {connecting && <p>Connecting…</p>}
-      <button
-        type="button"
-        disabled={!canConnect}
-        onClick={() => {
-          void connect();
-        }}
-      >
-        Connect
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          void cancel();
-        }}
-      >
-        Cancel
-      </button>
+    <div role="dialog" aria-labelledby="pair-title" className="dialog">
+      <div className="dialog-head">
+        <h2 id="pair-title">Pair new device</h2>
+      </div>
+      <div className="dialog-body">
+        <label htmlFor="pair-code">Pairing code</label>
+        <input
+          id="pair-code"
+          value={parsed.display}
+          onChange={(event) => {
+            setRaw(event.target.value);
+            setMessage(null);
+          }}
+          inputMode="numeric"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={connecting}
+          aria-invalid={parsed.problem !== null}
+        />
+        {parsed.problem !== null && (
+          <p className="notice">Use only the 10 digits shown on the phone.</p>
+        )}
+        {message !== null && (
+          <p role="alert" className="notice">
+            {message}
+          </p>
+        )}
+        {connecting && <p>Connecting…</p>}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="button primary"
+            disabled={!canConnect}
+            onClick={() => {
+              void connect();
+            }}
+          >
+            Connect
+          </button>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => {
+              void cancel();
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

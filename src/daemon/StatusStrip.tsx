@@ -5,7 +5,7 @@ export function StatusStrip({ port }: { port: DaemonPort }) {
   const status = useDaemonStatus(port);
 
   return (
-    <div className="status-strip" role="status" aria-live="polite">
+    <div className="notice" role="status" aria-live="polite">
       {status === null ? "Checking…" : statusLabel(status)}
     </div>
   );
