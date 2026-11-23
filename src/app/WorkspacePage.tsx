@@ -30,6 +30,7 @@ export function WorkspacePage({
   ended,
   onDismissEnded,
   reconnect,
+  onMoveToTray,
 }: {
   port: DaemonPort;
   sessions: readonly LiveSession[];
@@ -45,6 +46,7 @@ export function WorkspacePage({
   ended: readonly EndedSession[];
   onDismissEnded: (sessionId: string) => void;
   reconnect?: (deviceId: string) => Promise<ConnectOutcome>;
+  onMoveToTray?: () => void;
 }) {
   const count = sessions.length;
   const line =
@@ -57,6 +59,11 @@ export function WorkspacePage({
           <h1 tabIndex={-1}>Workspace</h1>
           <p>This computer · Solo · Local-first</p>
         </div>
+        {onMoveToTray !== undefined && (
+          <button type="button" className="button secondary" onClick={onMoveToTray}>
+            Move to tray
+          </button>
+        )}
       </header>
       <StatusStrip port={port} />
       <p>{line}</p>

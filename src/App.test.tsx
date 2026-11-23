@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import type { WindowPort } from "./app/windowLifecycle";
 import type { DaemonPort, DaemonStatus } from "./daemon/status";
 import type {
   DevicesPort,
@@ -553,5 +554,130 @@ describe("App end states and Reconnect (UK-03)", () => {
     );
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+});
+
+describe("App tray and quit (DT-09)", () => {
+  function fakeWindowPort() {
+    let notify: () => void = () => undefined;
+    const unsubscribe = vi.fn(() => undefined);
+    const hide = vi.fn(() => Promise.resolve());
+    const quit = vi.fn(() => Promise.resolve());
+    const onQuitRequested = vi.fn((cb: () => void) => {
+      notify = cb;
+      return Promise.resolve(unsubscribe);
+    });
+    const port: WindowPort = { hide, quit, onQuitRequested };
+    return {
+      port,
+      hide,
+      quit,
+      onQuitRequested,
+      unsubscribe,
+      fire: () => {
+        notify();
+      },
+    };
+  }
+
+  async function subscribeTo(fixture: ReturnType<typeof fakeWindowPort>): Promise<void> {
+    await waitFor(() => {
+      expect(fixture.onQuitRequested).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("quits at once with no live sessions and shows no dialog", async () => {
+    const window = fakeWindowPort();
+    render(<App port={daemonPort} hubPort={hubPort} windowPort={window.port} />);
+    await subscribeTo(window);
+
+    act(() => {
+      window.fire();
+    });
+
+    await waitFor(() => {
+      expect(window.quit).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("confirms with one live session, cancels, then quits", async () => {
+    const window = fakeWindowPort();
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} windowPort={window.port} />);
+    await subscribeTo(window);
+    act(() => {
+      push(liveSnapshot);
+    });
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    act(() => {
+      window.fire();
+    });
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("1 live session will end.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(window.quit).not.toHaveBeenCalled();
+
+    act(() => {
+      window.fire();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Quit" }));
+
+    await waitFor(() => {
+      expect(window.quit).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("shows the confirm on the Devices page too", async () => {
+    const window = fakeWindowPort();
+    const { hub, push } = fakeHub();
+    render(
+      <App
+        port={daemonPort}
+        hubPort={hub}
+        devicesPort={fakeDevicesPort()}
+        windowPort={window.port}
+      />,
+    );
+    await subscribeTo(window);
+    act(() => {
+      push(liveSnapshot);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+
+    act(() => {
+      window.fire();
+    });
+
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Devices" })).toBeInTheDocument();
+  });
+
+  it("moves to tray only with a window port", () => {
+    const window = fakeWindowPort();
+    const { rerender } = render(
+      <App port={daemonPort} hubPort={hubPort} windowPort={window.port} />,
+    );
+    expect(screen.getByRole("button", { name: "Move to tray" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move to tray" }));
+    expect(window.hide).toHaveBeenCalledTimes(1);
+
+    rerender(<App port={daemonPort} hubPort={hubPort} />);
+    expect(screen.queryByRole("button", { name: "Move to tray" })).toBeNull();
+  });
+
+  it("unsubscribes from quit-requested on unmount", async () => {
+    const window = fakeWindowPort();
+    const { unmount } = render(
+      <App port={daemonPort} hubPort={hubPort} windowPort={window.port} />,
+    );
+    await subscribeTo(window);
+
+    unmount();
+
+    expect(window.unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
