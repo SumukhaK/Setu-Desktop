@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-23 · main after #33 (DT-09 merged, UK-04 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-23 · main @ `075410f` (DT-09 merged, UK-04 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
