@@ -205,9 +205,71 @@ describe("reduce", () => {
       sessionId: "s1",
       deviceId: "pixel-7",
       reason: "peer_closed",
+      peerReason: "ended_on_device",
       at: 10,
     });
     expect(second.live.s1).toBeUndefined();
+  });
+
+  it("peer_closed stores a trimmed peer reason and null when it is blank", () => {
+    const exact = reduce(
+      synced([info("s1")]),
+      message({
+        type: "peer_closed",
+        session: "s1",
+        device_id: "pixel-7",
+        peer_reason: "User ended",
+      }),
+      10,
+    );
+    expect(exact.ended[0]?.peerReason).toBe("User ended");
+
+    const padded = reduce(
+      synced([info("s1")]),
+      message({
+        type: "peer_closed",
+        session: "s1",
+        device_id: "pixel-7",
+        peer_reason: "  User ended  ",
+      }),
+      10,
+    );
+    expect(padded.ended[0]?.peerReason).toBe("User ended");
+
+    for (const peerReason of ["", "   "]) {
+      const next = reduce(
+        synced([info("s1")]),
+        message({
+          type: "peer_closed",
+          session: "s1",
+          device_id: "pixel-7",
+          peer_reason: peerReason,
+        }),
+        10,
+      );
+      expect(next.ended[0]?.peerReason).toBeNull();
+    }
+  });
+
+  it("session_expired and session_down store no peer reason", () => {
+    const expired = reduce(
+      synced([info("s1")]),
+      message({
+        type: "session_expired",
+        session: "s1",
+        device_id: "pixel-7",
+        reason: "max_session_seconds",
+      }),
+      10,
+    );
+    expect(expired.ended[0]?.peerReason).toBeNull();
+
+    const down = reduce(
+      synced([info("s1")]),
+      message({ type: "session_down", session: "s1", abnormal: true }),
+      10,
+    );
+    expect(down.ended[0]?.peerReason).toBeNull();
   });
 
   it("an abnormal session_down uses the error reason", () => {
@@ -233,7 +295,7 @@ describe("reduce", () => {
 
   it("unavailable clears live sessions but keeps ended, epoch and generation", () => {
     const ended: SessionStoreState["ended"] = [
-      { sessionId: "old", deviceId: "pixel-7", reason: "closed", at: 4 },
+      { sessionId: "old", deviceId: "pixel-7", reason: "closed", peerReason: null, at: 4 },
     ];
     const state: SessionStoreState = { ...synced([info("s1")], 3), ended };
     const next = reduce(state, { kind: "unavailable", generation: 1 }, 0);
