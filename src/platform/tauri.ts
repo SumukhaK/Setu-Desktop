@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import type { WindowPort } from "../app/windowLifecycle";
 import type { DaemonPort, DaemonStatus } from "../daemon/status";
 import type { AdbConnectOutcome, AdbPort, AdbSnapshot } from "../features/adb/adbStatus";
 import type {
@@ -66,6 +67,20 @@ export const tauriDevicesPort: DevicesPort = {
 export const tauriSessionPort: SessionPort = {
   stop(sessionId) {
     return invoke<StopOutcome>("session_stop", { sessionId });
+  },
+};
+
+export const tauriWindowPort: WindowPort = {
+  hide() {
+    return invoke<undefined>("window_hide");
+  },
+  quit() {
+    return invoke<undefined>("app_quit");
+  },
+  onQuitRequested(cb) {
+    return listen("quit-requested", () => {
+      cb();
+    });
   },
 };
 

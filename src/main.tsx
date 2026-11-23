@@ -9,6 +9,7 @@ import {
   tauriPairPort,
   tauriSessionHubPort,
   tauriSessionPort,
+  tauriWindowPort,
 } from "./platform/tauri";
 import "./styles/app.css";
 
@@ -27,6 +28,7 @@ createRoot(root).render(
       sessionPort={tauriSessionPort}
       clipboard={navigator.clipboard}
       devicesPort={tauriDevicesPort}
+      windowPort={tauriWindowPort}
     />
   </StrictMode>,
 );
