@@ -396,3 +396,162 @@ describe("App saved devices", () => {
     expect(await screen.findByRole("heading", { name: "Saved devices" })).toBeInTheDocument();
   });
 });
+
+describe("App end states and Reconnect (UK-03)", () => {
+  const pushSnapshot = (
+    push: (message: HubMessage) => void,
+    deviceId = "dev-1",
+    epoch = 1,
+  ): void => {
+    act(() => {
+      push({
+        kind: "snapshot",
+        epoch,
+        generation: 1,
+        sessions: [
+          {
+            session_id: "s1",
+            adb_addr: "127.0.0.1:41377",
+            device_id: deviceId,
+            started: "t0",
+          },
+        ],
+      });
+    });
+  };
+
+  const pushEvent = (push: (message: HubMessage) => void, event: HubEvent): void => {
+    act(() => {
+      push({ kind: "event", epoch: 1, generation: 1, event });
+    });
+  };
+
+  const peerClosed = (peer_reason: string): HubEvent => ({
+    type: "peer_closed",
+    session: "s1",
+    device_id: "dev-1",
+    peer_reason,
+  });
+
+  const fakeReconnectPort = () => {
+    const connect = vi.fn((): Promise<ConnectOutcome> =>
+      Promise.resolve({
+        outcome: "connected",
+        session_id: "s1",
+        device_id: "dev-1",
+        adb_addr: "127.0.0.1:41377",
+      }),
+    );
+    return { devicesPort: { ...fakeDevicesPort(), connect }, connect };
+  };
+
+  it("shows the peer_closed reason and never retries on its own", async () => {
+    const { devicesPort, connect } = fakeReconnectPort();
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} devicesPort={devicesPort} />);
+    pushSnapshot(push);
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    pushEvent(push, peerClosed("User ended"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The session was ended on the phone.");
+    expect(alert).toHaveTextContent("Reason: User ended");
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  const endings: Array<[HubEvent, string]> = [
+    [
+      {
+        type: "session_expired",
+        session: "s1",
+        device_id: "dev-1",
+        reason: "max_session_seconds",
+      },
+      "The session time limit was reached.",
+    ],
+    [
+      { type: "session_down", session: "s1", abnormal: true },
+      "The connection to the phone ended unexpectedly.",
+    ],
+  ];
+
+  it.each(endings)("shows a notice for %j", async (event, text) => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} />);
+    pushSnapshot(push);
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    pushEvent(push, event);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+  });
+
+  it("shows nothing for a normal Disconnect", async () => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} />);
+    pushSnapshot(push);
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    pushEvent(push, { type: "session_down", session: "s1", abnormal: false });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("article")).toBeNull();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reconnects by device id and hides the notice once that device is live", async () => {
+    const { devicesPort, connect } = fakeReconnectPort();
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} devicesPort={devicesPort} />);
+    pushSnapshot(push);
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+    pushEvent(push, peerClosed("User ended"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledWith("dev-1");
+
+    pushSnapshot(push, "dev-1", 2);
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+  });
+
+  it("keeps a dismissed notice hidden after a Devices round trip", async () => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} devicesPort={fakeDevicesPort()} />);
+    pushSnapshot(push);
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+    pushEvent(push, peerClosed("User ended"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a notice without Reconnect when there is no devices port", async () => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} />);
+    pushSnapshot(push);
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    pushEvent(push, peerClosed("User ended"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The session was ended on the phone.",
+    );
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+});

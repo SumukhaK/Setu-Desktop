@@ -72,6 +72,7 @@ export interface EndedSession {
   sessionId: string;
   deviceId: string | null;
   reason: EndReason;
+  peerReason: string | null;
   at: number;
 }
 
@@ -179,10 +180,12 @@ function reduceEvent(
     }
     const reason: EndReason =
       event.type === "session_down" ? (event.abnormal ? "error" : "closed") : event.type;
+    const trimmedReason = event.type === "peer_closed" ? event.peer_reason.trim() : null;
     const ended: EndedSession = {
       sessionId: event.session,
       deviceId: event.type === "session_down" ? previous.deviceId : event.device_id,
       reason,
+      peerReason: trimmedReason === null || trimmedReason === "" ? null : trimmedReason,
       at: now,
     };
     const live = Object.fromEntries(
