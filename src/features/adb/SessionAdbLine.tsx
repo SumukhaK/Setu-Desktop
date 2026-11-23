@@ -40,11 +40,12 @@ export function SessionAdbLine({
   }
 
   return (
-    <div>
+    <div className="session-adb">
       <p>{`${session.adbAddr ?? "Address pending"} · ${attachmentLabel(attachment)}`}</p>
       {showConnect && (
         <button
           type="button"
+          className="button primary"
           disabled={pending}
           onClick={() => {
             void connect();
@@ -53,7 +54,11 @@ export function SessionAdbLine({
           Connect ADB
         </button>
       )}
-      {message !== null && <p role="alert">{message}</p>}
+      {message !== null && (
+        <p role="alert" className="notice">
+          {message}
+        </p>
+      )}
     </div>
   );
 }

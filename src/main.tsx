@@ -10,6 +10,7 @@ import {
   tauriSessionHubPort,
   tauriSessionPort,
 } from "./platform/tauri";
+import "./styles/app.css";
 
 const root = document.getElementById("root");
 if (root === null) {

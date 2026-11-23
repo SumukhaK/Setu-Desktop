@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-22 · main @ `59aece4` (UK-01 merged, UK-02 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-23 · main @ `0816f3d` (UK-02 merged, UK-03 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -27,20 +27,19 @@ Last updated: 2026-11-22 · main @ `59aece4` (UK-01 merged, UK-02 prompt issued)
 README.md  index.html  styles.css      prototype (fixtures, not app code)
 package.json vite.config.ts tsconfig.json eslint.config.js .prettierrc.json
 src/                                   React UI (Vite root; AD-9)
-  index.html main.tsx App.tsx          App(port) = heading + StatusStrip
+  index.html main.tsx App.tsx          App: page state (workspace|devices), hooks + pairing open flag stay here; main.tsx imports styles/app.css
+  app/                                 Shell (chrome, rail, aria-current nav, focus h1 on switch), Icon, WorkspacePage, DevicesPage; styles/app.css = prototype tokens
   daemon/status.ts                     DaemonStatus, DaemonPort, statusLabel(), useDaemonStatus(port)
   daemon/StatusStrip.tsx               role="status", "Checking…" until first status
   features/adb/                       adbStatus (AdbSnapshot mirror, attachmentOf exact serial, labels), useAdbStatus, SessionAdbLine (+ Connect ADB)
   features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog
   features/devices/                  devicesPort (List/Forget/Nickname outcome mirrors, messages), DeviceList (request counter), DeviceDetail (inline forget confirm)
   features/session/                   transport (transportOf path>audit>unknown, transportLabel), StatusStrip, sessionPort (StopOutcome, stopMessage), SessionCard(clock), rejoinMachine (rejoinViewOf, nextWakeAt), RejoinBanner
-  state/clock.ts                       Clock { now() } + systemClock (performance.now)
-  state/sessionStore.ts                HubMessage/HubEvent mirrors, SessionStoreState, pure reduce(state, msg, now)
-  state/useSessions.ts                 SessionHubPort, useSessions(port, clock): subscribe first, then resync()
+  state/                               clock (Clock, systemClock), sessionStore (HubMessage mirrors, pure reduce(state, msg, now)), useSessions(port, clock): subscribe, then resync()
   platform/tauri.ts                    tauriDaemonPort, tauriSessionHubPort, tauriSessionPort: the only @tauri-apps/api import
 src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (default-run) + bin `fake-setu-daemon`
   Cargo.toml Cargo.lock build.rs       build.rs: tauri_build + Windows test manifest / WebView2Loader.dll copy (GNU)
-  tauri.conf.json capabilities/ icons/ one "main" window "Setu", strict CSP, bundle inactive, no externalBin
+  tauri.conf.json capabilities/ icons/ one "main" window "Setu", strict CSP (+ dev-only devCsp, UK-02), bundle inactive, no externalBin
   src/lib.rs                           pub mod adb; app; commands; daemon; events; rpc; store;
   src/app/mod.rs                       #[cfg(not(test))] mod shell: builder, single-instance, setup, status forwarder, daemon_status
   src/app/status.rs                    AppStatus, status_of, resolve_daemon_path, resolve_relay (+ unit tests)
@@ -57,8 +56,7 @@ src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (
   src/events/gate.rs                   ResyncGate: epoch, Live | Resyncing{buffer, again}
   src/events/hub.rs                    EventHub task: dedicated connection, subscribe → list → ordered forward, 1 s retry
   tests/event_hub.rs                   9 hub tests (wire order, P21, P18, P17, close/Stopped, auth rejection)
-  src/rpc/framing.rs                   encode(), LineDecoder, MAX_LINE_BYTES (1 MiB, excl. newline)
-  src/rpc/client.rs                    RpcClient, Notification, VersionInfo (~265 lines)
+  src/rpc/framing.rs client.rs         encode(), LineDecoder (1 MiB cap); RpcClient, Notification, VersionInfo
   src/rpc/errors.rs                    SetuError, from_error_object()
   tests/rpc_client.rs                  13 client tests (order, busy, notifications, disconnect, drop)
   tests/support/fake_daemon.rs         FakeDaemon: in-process JSON-RPC line server on 127.0.0.1:0
@@ -132,6 +130,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| UK-02 | [#29](https://github.com/SumukhaK/Setu-Desktop/pull/29) | App shell: chrome, rail, Workspace and Devices pages, one stylesheet from the prototype tokens, dev-only CSP. No review round; reviewer checked the build under the production CSP header. |
 | UK-01 | [#26](https://github.com/SumukhaK/Setu-Desktop/pull/26) | CI on Linux + Windows MSVC and a real-daemon e2e job. The e2e failed until the reviewer's fix (#27) kept one ADB stream open across the relay outage. |
 | DT-08 | [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24) | Saved devices list, nicknames (AD-14), connect by id, forget with inline confirm, SlotGuard token fix. No review round; gates re-run on Linux and a live run against daemon v1.1.0 passed. |
 | DT-07 | [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21) | Rejoin banners: pure `rejoinMachine`, one-timer `RejoinBanner`, `at` stamps on tunnels, one Clock shared by store and cards. No review round; gates re-run on Linux. |
@@ -143,8 +142,9 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 
 ## Open items
 
-- Active ticket: UK-02 · App shell, navigation rail, pages and styling (prompt issued 2026-11-22). Page state in App (no router), `src/styles/app.css` from the prototype tokens, `Icon.tsx`, static Solo picker, prod CSP unchanged + dev-only `devCsp`, no inline styles.
-- 2026-11-22 audit (TDD_TICKETS §5a): upkeep UK-01 done (#26), UK-02 app shell/nav/styling incl. dev-only CSP, UK-03 Solo end states (`ended` is collected but never rendered), UK-04 nits (PairDialog, DeviceList load and DeviceDetail save don't catch a rejected invoke, RejoinBanner re-arm, hub `Unavailable` per retry, build.rs WebView2 path). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
+- Active ticket: UK-03 · Solo end states and Reconnect (prompt issued 2026-11-23). `EndedNotice` per non-closed ended session, `peerReason`, dismissed set in App, Reconnect via `DevicesPort.connect`, notice hides once its device is live again. Then DT-09, UK-04, DT-10.
+- UK-02 nits: `app.css` is ~650 lines (Prettier expands rules; fine). `PairDialog` loses a typed code on a page switch (added to UK-04 as item 5).
+- 2026-11-22 audit (TDD_TICKETS §5a): UK-01 (#26) and UK-02 (#29) done, UK-03 Solo end states (`ended` is collected but never rendered), UK-04 nits (PairDialog, DeviceList load and DeviceDetail save don't catch a rejected invoke, RejoinBanner re-arm, hub `Unavailable` per retry, build.rs WebView2 path). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
 - Design rebase merged (#8): the phone's session label is now shown as **Connected as (unverified)** (peerLabel may be the desktop label, corporate user or key fingerprint). The T−5 minute warning hook (`setuDesktopSessionDeadline`) has no v1.1.0 source: native tickets must never feed it a credential `expires_at`. The page allowlist excludes `auth.set_token` and `identity.public_key` (native only, DT-14).
 - Merged `feature/*` and `upkeep/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
 - SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes. v1.1.0 prints only `daemon_ready` on stdout; if a future daemon writes more, recheck the drain thread on SDK upgrades.

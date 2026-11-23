@@ -20,7 +20,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-07 · Path and rejoin banners · Done in [#21](https://github.com/SumukhaK/Setu-Desktop/pull/21)
 - [x] DT-08 · Devices list, forget and nicknames (solo) · Done in [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24)
 - [x] UK-01 · CI and real-daemon smoke test · Done in [#26](https://github.com/SumukhaK/Setu-Desktop/pull/26)
-- [ ] UK-02 · App shell: navigation rail, pages and styling · after UK-01, before DT-09
+- [x] UK-02 · App shell: navigation rail, pages and styling · Done in [#29](https://github.com/SumukhaK/Setu-Desktop/pull/29)
 - [ ] UK-03 · Solo end states and Reconnect · after UK-02, before DT-09
 - [ ] UK-04 · Robustness nits · before DT-10
 - [ ] DT-09 · Tray and background
@@ -329,7 +329,7 @@ Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 pro
     - `session_expired` → "Session time limit reached"
     - abnormal `session_down` → "Connection to the phone ended unexpectedly"
     - a normal close shows nothing
-  - **Reconnect** calls DT-08's `connect(deviceId)` and is hidden when `deviceId` is null or the device already has a live session.
+  - **Reconnect** calls DT-08's `connect(deviceId)` and is hidden when `deviceId` is null or there's no `devicesPort`. A notice whose device has a live session again hides on its own (decided at prompt time, 2026-11-23).
 - **Out of scope:** corporate codes `-32014`..`-32018` and SSO (DT-16).
 
 ### UK-04 · Robustness nits
@@ -340,7 +340,8 @@ Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 pro
   2. If `RejoinBanner`'s timeout fires 1 ms before `since + 10 s`, it re-arms and holding still appears. Add the redraw tick to the effect deps.
   3. The hub emits `Unavailable` once per loss, not on every 1 s failed retry (`hub.rs` connect, subscribe and list error paths).
   4. `build.rs` finds `WebView2Loader.dll`'s target dir by walking `OUT_DIR` ancestors to the directory named `$PROFILE`, not a fixed 4 levels, so older Cargo layouts work.
-- **Out of scope:** behaviour changes beyond these four.
+  5. `PairDialog` unmounts on a page switch, so a typed code or a pending connect is lost; only the open flag survives (UK-02 review nit). Keep the dialog's draft in App, or block navigation while a connect is pending.
+- **Out of scope:** behaviour changes beyond these five.
 
 ---
 
