@@ -39,6 +39,60 @@ const pairPort: PairPort = {
   cancel: vi.fn(() => Promise.resolve(false)),
 };
 
+function fakeDevicesPort(): DevicesPort {
+  return {
+    list: vi.fn((): Promise<ListOutcome> => Promise.resolve({ outcome: "listed", devices: [] })),
+    forget: vi.fn((): Promise<ForgetOutcome> => Promise.resolve({ outcome: "forgotten" })),
+    setNickname: vi.fn((): Promise<NicknameOutcome> =>
+      Promise.resolve({ outcome: "saved", nickname: null }),
+    ),
+    connect: vi.fn((): Promise<ConnectOutcome> =>
+      Promise.resolve({
+        outcome: "connected",
+        session_id: "s1",
+        device_id: "pixel-7",
+        adb_addr: "127.0.0.1:41377",
+      }),
+    ),
+    cancelConnect: vi.fn(() => Promise.resolve(true)),
+  };
+}
+
+function fakeHub() {
+  let push: (message: HubMessage) => void = () => undefined;
+  const subscribe = vi.fn((onMessage: (message: HubMessage) => void) => {
+    push = onMessage;
+    return Promise.resolve(() => undefined);
+  });
+  const hub: SessionHubPort = {
+    subscribe,
+    resync() {
+      return Promise.resolve();
+    },
+  };
+  return {
+    hub,
+    subscribe,
+    push: (message: HubMessage) => {
+      push(message);
+    },
+  };
+}
+
+const liveSnapshot: HubMessage = {
+  kind: "snapshot",
+  epoch: 1,
+  generation: 1,
+  sessions: [
+    {
+      session_id: "s1",
+      adb_addr: "127.0.0.1:41377",
+      device_id: "pixel-7",
+      started: "t0",
+    },
+  ],
+};
+
 describe("App", () => {
   it("opens the pairing dialog and closes it again", () => {
     render(<App port={daemonPort} hubPort={hubPort} pairPort={pairPort} />);
@@ -242,29 +296,103 @@ describe("App rejoin banner and denial (P14)", () => {
   });
 });
 
+describe("App shell navigation", () => {
+  it("opens on the Workspace page with no Devices item without a devices port", () => {
+    render(<App port={daemonPort} hubPort={hubPort} />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Workspace" })).toBeInTheDocument();
+    expect(screen.getByText("This computer · Solo · Local-first")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
+  });
+
+  it("switches to Devices, focuses its heading and hides the session cards", async () => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} devicesPort={fakeDevicesPort()} />);
+    act(() => {
+      push(liveSnapshot);
+    });
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "Devices" })).toHaveFocus();
+    expect(screen.getByText("Paired phones on this computer")).toBeInTheDocument();
+    expect(screen.queryByRole("article")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Saved devices" })).toBeInTheDocument();
+  });
+
+  it("keeps a session live across both switches, including an event while on Devices", async () => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} devicesPort={fakeDevicesPort()} />);
+    act(() => {
+      push(liveSnapshot);
+    });
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    act(() => {
+      push({
+        kind: "event",
+        epoch: 1,
+        generation: 1,
+        event: {
+          type: "path_up",
+          session: "s1",
+          tunnel_id: "t1",
+          transport: "relay-wss",
+          outage_ms: 0,
+        },
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+    expect(screen.getByText("Transport: Relay (WSS)")).toBeInTheDocument();
+  });
+
+  it("subscribes to the hub once across both switches", async () => {
+    const { hub, subscribe } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} devicesPort={fakeDevicesPort()} />);
+    await waitFor(() => {
+      expect(subscribe).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the pairing dialog open after a round trip to Devices", () => {
+    render(
+      <App
+        port={daemonPort}
+        hubPort={hubPort}
+        pairPort={pairPort}
+        devicesPort={fakeDevicesPort()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pair new device" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
 describe("App saved devices", () => {
   it("renders the Saved devices section only when a devices port is given", async () => {
-    const devicesPort: DevicesPort = {
-      list: vi.fn((): Promise<ListOutcome> => Promise.resolve({ outcome: "listed", devices: [] })),
-      forget: vi.fn((): Promise<ForgetOutcome> => Promise.resolve({ outcome: "forgotten" })),
-      setNickname: vi.fn((): Promise<NicknameOutcome> =>
-        Promise.resolve({ outcome: "saved", nickname: null }),
-      ),
-      connect: vi.fn((): Promise<ConnectOutcome> =>
-        Promise.resolve({
-          outcome: "connected",
-          session_id: "s1",
-          device_id: "pixel-7",
-          adb_addr: "127.0.0.1:41377",
-        }),
-      ),
-      cancelConnect: vi.fn(() => Promise.resolve(true)),
-    };
+    const devicesPort = fakeDevicesPort();
 
     const { rerender } = render(<App port={daemonPort} hubPort={hubPort} />);
     expect(screen.queryByRole("heading", { name: "Saved devices" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
 
     rerender(<App port={daemonPort} hubPort={hubPort} devicesPort={devicesPort} />);
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
     expect(await screen.findByRole("heading", { name: "Saved devices" })).toBeInTheDocument();
   });
 });
