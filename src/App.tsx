@@ -45,7 +45,16 @@ export function App({
   const adb = useAdbStatus(adbPort ?? null);
   const [pairing, setPairing] = useState(false);
   const [page, setPage] = useState<Page>("workspace");
+  const [dismissedEnded, setDismissedEnded] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const live = Object.values(sessions.live);
+  const endedNotices = sessions.ended.filter(
+    (session) =>
+      session.reason !== "closed" &&
+      !dismissedEnded.has(session.sessionId) &&
+      (session.deviceId === null || !live.some((active) => active.deviceId === session.deviceId)),
+  );
 
   return (
     <Shell
@@ -70,6 +79,11 @@ export function App({
           onPairingClose={() => {
             setPairing(false);
           }}
+          ended={endedNotices}
+          onDismissEnded={(sessionId) => {
+            setDismissedEnded((current) => new Set(current).add(sessionId));
+          }}
+          reconnect={devicesPort === undefined ? undefined : devicesPort.connect.bind(devicesPort)}
         />
       ) : devicesPort !== undefined ? (
         <DevicesPage port={devicesPort} liveDeviceIds={live.map((session) => session.deviceId)} />
