@@ -1,137 +1,114 @@
-# Builder prompt · UK-02 · App shell: navigation rail, pages and styling
+# Builder prompt · UK-03 · Solo end states and Reconnect
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
 1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-14).
-2. `docs/TDD_TICKETS.md` §5a "UK-02".
-3. `docs/SCREENS.md`: the layout block at the top ("Relay sidebar and workspace cards with the Signal status strip"), and rows D03 and D04.
-4. The prototype, which is the **visual reference only, never app code**:
-   - `index.html`: the chrome header.
-   - `styles.css`: the tokens in `:root`, plus `.chrome`, `.wordmark`, `.brand-mark`, `.shell`, `.rail`, `.workspace-picker`, `.rail-nav`, `.nav-link`, `.main-pane`, `.main-inner`, `.app-status`, `.page-heading`, `.button*`, `.card`, `.section-header`, `.session-card`, `.status*`, `.signal-strip`, `.notice*`, `.list*`, `dialog`, `.dialog-*`, and the `@media` rules for those.
-   - `prototype.js`: `icons`, `railButton`, `render`, `workspacePage`, `sessionCard`, `signalStrip`, `devicesPage`.
-5. Existing UI you'll restyle without changing behaviour:
-   - `src/App.tsx`
-   - `src/daemon/StatusStrip.tsx`
-   - `src/features/session/*` (`SessionCard`, `StatusStrip`, `RejoinBanner`)
-   - `src/features/adb/SessionAdbLine.tsx`
-   - `src/features/pair/PairDialog.tsx`
-   - `src/features/devices/*`
-6. `src-tauri/tauri.conf.json` (`app.security.csp`).
+2. `docs/TDD_TICKETS.md` §5a "UK-03".
+3. `docs/JOURNEYS.md`: the error table rows `-32025` and `-32026`, and row P10. `docs/SCREENS.md` row D07 (end states and manual **Reconnect** only).
+4. Setu-SDK v1.1.0 `API_SPEC.md` §1.5 (`session_down`, `peer_closed`, `session_expired`): https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
+5. Existing code you'll use:
+   - `src/state/sessionStore.ts` (`EndedSession`, `EndReason`, the `session_down` / `peer_closed` / `session_expired` branch)
+   - `src/features/devices/devicesPort.ts` (`DevicesPort.connect(deviceId)`, `connectMessage`)
+   - `src/app/WorkspacePage.tsx`, `src/App.tsx`, `src/styles/app.css` (`.notice`, `.notice.warning`, `.button*`)
+   - `src/features/session/RejoinBanner.tsx` (the pattern for a notice with **Dismiss**)
 
-**Fact this ticket relies on:** Vite emits imported CSS as a linked stylesheet in `npm run build`, which the production CSP `style-src 'self'` allows. In `vite dev` it injects `<style>` tags, which that CSP blocks. Tauri v2 has a separate `app.security.devCsp` for dev builds.
+**Facts this ticket relies on (already true on `main`):**
+- The bridge already forwards `session_down {session, abnormal}`, `peer_closed {session, device_id, peer_reason}` and `session_expired {session, device_id, reason}`. **No Rust change is needed or allowed.**
+- The store already moves a live session into `ended` (newest first, at most 20) with `reason` `closed` | `error` | `peer_closed` | `session_expired`, and ignores the event when the session isn't live. So a `session_down` that follows `peer_closed` for the same session adds nothing.
+- A snapshot keeps `ended` as it is.
+- `session.stop` (the card's **Disconnect**) ends with `session_down {abnormal: false}`, so reason `closed`.
+- DT-08's `DevicesPort.connect(deviceId)` returns a `ConnectOutcome`; `connectMessage(outcome)` gives the failure text, or `null` for `connected`.
 
 ## 1. Goal
 
-The app gets the selected layout: a top chrome bar with the wordmark, a left rail and a main pane. The rail has the workspace label at the top and navigation below it. The main pane has a page heading, the page content and the footer `Setu-SDK v1.1.0`.
-
-There are two pages:
-- **Workspace:** the daemon status strip, the session cards and **Pair new device**.
-- **Devices:** the DT-08 Saved devices list.
-
-Existing components get the prototype's look through class names and one stylesheet. **Behaviour, copy, roles and labels don't change**, so every existing test keeps passing unedited, except the few App tests that must click into Devices first.
+Today a session that ends on the phone, expires or drops makes its card vanish without a word. After this ticket, the Workspace page shows one notice for each such ended session, above the session cards. Each notice has **Dismiss** and, when the device is known, a manual **Reconnect**. A normal close shows nothing. Nothing retries automatically.
 
 Out of scope:
-- The workspace switcher (the D01 Corporate entry). The picker is a static label, "Solo" over "Solo mode", until DT-14.
-- The topology diagram.
+- Corporate codes `-32014`..`-32018`, SSO and the "Your organization's…" wording (DT-16).
 - Tray (DT-09).
-- Pages for Audit log, Diagnostics and Settings. Each later ticket adds its own rail item.
-- Toasts.
-- Dark mode.
+- Toasts, animation and new CSS beyond reusing `.notice`.
+- Persisting notices across restarts.
 
 ## 2. Files (create or change only these)
 
 ```
-src/styles/app.css                    tokens + the ported rules in §3 (≤ ~350 lines)
-src/app/Icon.tsx                      <Icon name size> rendering the prototype's SVG paths for: grid, phone, laptop, plus, link, unlink, terminal, monitor
-src/app/Shell.tsx                     chrome + rail + main pane + footer; props { page, onNavigate, children }
-src/app/Shell.test.tsx
-src/app/WorkspacePage.tsx             what App renders today minus DeviceList, under heading "Workspace"
-src/app/DevicesPage.tsx               DeviceList under heading "Devices"
-src/App.tsx, src/App.test.tsx         page state; hooks stay in App
-src/main.tsx                          import "./styles/app.css" once
-src/index.html                        <html lang="en">, <meta name="color-scheme" content="light">; nothing else
-src/daemon/StatusStrip.tsx            className only
-src/features/session/SessionCard.tsx, StatusStrip.tsx, RejoinBanner.tsx   className only
-src/features/adb/SessionAdbLine.tsx    className only
-src/features/pair/PairDialog.tsx       className only
-src/features/devices/DeviceList.tsx, DeviceDetail.tsx                       className only
-src-tauri/tauri.conf.json              + app.security.devCsp (§3)
+src/state/sessionStore.ts                 EndedSession gains peerReason: string | null
+src/state/sessionStore.test.ts            + the store cases in §4
+src/features/session/EndedNotice.tsx      one notice per ended session
+src/features/session/EndedNotice.test.tsx
+src/app/WorkspacePage.tsx                 render the notices between the session count line and the session cards
+src/App.tsx, src/App.test.tsx             dismissed set held in App; pass ended, live device ids and devicesPort down
 ```
 
-"className only" means you may add `className` attributes and wrapping `<div>`s with no role. You must not change text, roles, `aria-*`, handlers, element order, or the element types that tests query. Don't touch `src-tauri/src/`, `src/state/`, `src/platform/`, any `*Port.ts`, `docs/`, `README.md`, the root prototype files, or CI. Add no npm package (no router, CSS framework or icon library).
+Don't touch `src-tauri/`, `src/platform/`, any `*Port.ts`, `useSessions.ts`, `RejoinBanner.tsx`, `SessionCard.tsx`, `src/features/devices/*`, `src/features/pair/*`, `src/styles/app.css`, `docs/`, `README.md`, the prototype or CI. Add no npm package.
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**Page state (App).**
-- `type Page = "workspace" | "devices"`, held in `useState<Page>("workspace")` in `App`.
-- `useSessions`, `useAdbStatus` and the pairing-dialog open state stay in `App`, above both pages, so switching pages never resubscribes or drops a session.
-- The Devices rail item renders only when `devicesPort` is given.
-- No URL routing, no hash and no history.
+**Store.**
+- `EndedSession` gains `peerReason: string | null`.
+- For `peer_closed`, set it to `peer_reason` when that is a non-empty string after trimming, otherwise `null`. For every other reason it's `null`.
+- Nothing else in the reducer changes.
 
-**Shell.**
-- `<header className="chrome">`: the wordmark `<span className="wordmark">` (brand mark, "setu" and a period), not a link. The demo-scenarios button is not ported.
-- `<div className="shell">` containing:
-  - `<aside className="rail">`, which holds:
-    - a static `<div className="workspace-picker">` with the laptop glyph, `<strong>Solo</strong>` and `<small>Solo mode</small>`, with no button role
-    - `<nav aria-label="Workspace navigation" className="rail-nav">` with a `<button className="nav-link">` per page (icon + label: grid "Workspace", phone "Devices"). The current page's button has `aria-current="page"` and the `active` class.
-  - `<main id="main" className="main-pane" tabIndex={-1}>` containing `<div className="main-inner">{children}</div>` and `<footer className="app-status">Setu-SDK v1.1.0</footer>`.
-- On navigation, move focus to the new page's `<h1>` (`tabIndex={-1}`), as the prototype does.
+**`EndedNotice.tsx`.** Props:
 
-**Pages.**
-- Each page opens with `<header className="page-heading"><div><h1 tabIndex={-1}>…</h1><p>…</p></div></header>`:
-  - Workspace: subtitle "This computer · Solo · Local-first".
-  - Devices: subtitle "Paired phones on this computer".
-- Today's App heading `<h1>Setu</h1>` moves into the chrome as the wordmark. Each page's `<h1>` is its title.
-- Workspace renders, in today's order:
-  1. the daemon `StatusStrip`
-  2. the session count line
-  3. the `SessionCard`s (each in `className="card session-card"`)
-  4. **Pair new device** (`button primary`)
-  5. `PairDialog`
+```ts
+{
+  ended: EndedSession;
+  canReconnect: boolean;            // deviceId !== null and a devicesPort exists
+  reconnect: (deviceId: string) => Promise<ConnectOutcome>;
+  onDismiss: (sessionId: string) => void;
+}
+```
 
-**Styles (`app.css`).**
-- Copy the `:root` tokens **verbatim**, plus the base rules (`*`, `body`, buttons, focus-visible, `h1`–`h3`, `code`).
-- Port only the selectors listed in §0.4 that a rendered component uses.
-- Map them onto existing elements:
+- `reason === "closed"` renders `null`.
+- Otherwise it renders `<div role="alert" className="notice warning">` with one sentence, then the buttons:
+  - `peer_closed`: "The session was ended on the phone." When `peerReason` is not null, append ` Reason: {peerReason}`.
+  - `session_expired`: "The session time limit was reached."
+  - `error`: "The connection to the phone ended unexpectedly."
+- **Reconnect** (`button primary`) shows only when `canReconnect`, and `ended.deviceId` is not null.
+  - On click it calls `reconnect(deviceId)` once and disables itself, with the text "Reconnecting…", until the promise settles.
+  - On `connected`, it does nothing more. The new live session hides the notice (see App).
+  - On any other outcome, it re-enables the button and shows `connectMessage(outcome)` in a `<p>` inside the notice when that isn't `null` (`cancelled` shows nothing).
+  - If the promise rejects, it re-enables the button and shows "Couldn't reach the Setu service. Try again."
+- **Dismiss** (`button quiet`) calls `onDismiss(sessionId)`.
+- No timers and no automatic retry.
 
-  | Element | Class |
-  | --- | --- |
-  | session StatusStrip `<ul aria-label="Session status">` | `signal-strip` (three cells) |
-  | each fact | `<li>` cell |
-  | daemon strip | `notice` |
-  | RejoinBanner holding | `notice warning` |
-  | RejoinBanner lost | `notice warning` |
-  | alerts | `notice` |
-  | buttons | `button` plus `primary`, `secondary` or `quiet` |
-  | Disconnect | `button quiet danger` |
-  | device rows | `list` / `list-row` |
-  | DeviceDetail | `card` |
+**App and WorkspacePage.**
+- `App` holds `const [dismissedEnded, setDismissedEnded] = useState<ReadonlySet<string>>(new Set())`, so dismissals survive a switch to Devices and back.
+- The notices shown are `sessions.ended` filtered to:
+  - `reason !== "closed"`
+  - `sessionId` not in `dismissedEnded`
+  - and `deviceId` is null **or** no live session has that `deviceId` (once the device is live again, its old notice is stale and hides on its own).
+- They render newest first, in the order the store keeps them.
+- `canReconnect` is `devicesPort !== undefined && ended.deviceId !== null`. `reconnect` is `devicesPort.connect`.
+- `WorkspacePage` gets the filtered list plus `onDismissEnded` and `reconnect` props, and renders each `EndedNotice` with `key={sessionId}` between the count line and the first `SessionCard`.
+- The count line and everything else on the page stay as they are.
 
-- The `.signal-strip` grid uses three columns, not the prototype's four.
-- **No inline `style={…}` anywhere**, because the production CSP forbids style attributes. No `!important` except the prototype's `[hidden]` rule.
-
-**CSP.**
-- Keep `app.security.csp` exactly as it is.
-- Add `"devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self'"`.
-- Add a Rust-free check: a Vitest test that reads `src-tauri/tauri.conf.json` and asserts that `csp` contains `style-src 'self'` and not `unsafe-inline`.
+**Styles.** Use the existing `.notice warning` and `.button` classes only. No new CSS, no inline `style={…}`.
 
 ## 4. TDD: write these tests first, see them fail, then implement
 
-- `Shell.test.tsx`:
-  - It renders the chrome wordmark, the Workspace navigation landmark, the "Solo mode" label and the footer `Setu-SDK v1.1.0`.
-  - Only the items passed in render; with no `devicesPort`, there's no Devices button.
-  - The current item has `aria-current="page"`. Clicking another item calls `onNavigate` with its page.
-- `App.test.tsx`:
-  - The default page is Workspace, and its `h1` is "Workspace".
-  - Clicking **Devices** shows the Saved devices section, focuses the "Devices" `h1`, and hides the session cards.
-  - Going back to Workspace still shows the live session card. It stays live even when a hub event arrives while on Devices.
-  - The fake hub `subscribe` was called **once** across both switches.
-  - The pairing dialog opened on Workspace is still open after Devices and back again.
-  - Update the existing App tests that look for the device list so they click **Devices** first. No other existing test may change.
-- CSP test as in §3.
-- **Visual evidence:** attach to the PR two screenshots from `npm run tauri dev` (Workspace with a session if you can pair a phone, otherwise empty; and Devices), and one from `npm run build && npx vite preview` with the devtools console showing no CSP errors.
+- **Store (`sessionStore.test.ts`):**
+  - `peer_closed` with `peer_reason: "User ended"` stores `peerReason: "User ended"`; with `""` or `"  "` it stores `null`.
+  - `session_expired` and `session_down` store `peerReason: null`.
+  - `peer_closed` then `session_down` for the same session leaves exactly one `ended` entry, with reason `peer_closed`.
+- **`EndedNotice.test.tsx`:**
+  - Each reason shows its sentence. `closed` renders nothing (`container` is empty).
+  - `peer_closed` with a reason shows "Reason: User ended"; without one it doesn't show "Reason:".
+  - **Reconnect** is absent when `canReconnect` is false, and when `deviceId` is null.
+  - Clicking **Reconnect** calls `reconnect` once with the device id and disables the button while it's pending; a double click doesn't call it twice.
+  - A `not_paired` outcome re-enables the button and shows `connectMessage`'s text.
+  - A rejected promise shows "Couldn't reach the Setu service. Try again."
+  - **Dismiss** calls `onDismiss` with the session id.
+- **`App.test.tsx` (fake hub, fake ports):**
+  1. Snapshot one live session for `dev-1`, then `peer_closed {peer_reason: "User ended"}`: the card is gone, the notice shows with the reason, and no `connect` call happens on its own (no automatic retry).
+  2. `session_expired` and `session_down {abnormal: true}` each show their notice. **Disconnect** (`session_down {abnormal: false}`) shows none.
+  3. **Reconnect** calls `devicesPort.connect("dev-1")`. A later snapshot with a live session for `dev-1` hides the notice.
+  4. **Dismiss** hides the notice. It stays hidden after switching to Devices and back.
+  5. Without a `devicesPort`, the notice shows but has no **Reconnect**.
+- No existing test may change, except where `EndedSession` literals now need `peerReason`.
 
 ## 5. Gates (all must pass before you push)
 
@@ -142,7 +119,7 @@ npm ci
 npm run typecheck && npm run lint && npm run format:check && npm test && npm run build
 ```
 
-From `src-tauri/`:
+From `src-tauri/` (unchanged code, but prove it):
 
 ```
 cargo fmt --check
@@ -152,22 +129,24 @@ cargo test
 
 All three CI jobs (`gates-linux`, `gates-windows`, `e2e-linux`) must be green on the PR head. Use no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no non-null `!`, and no inline styles. If a gate fails for a reason you can't fix in code, stop and report the exact error.
 
+**Manual check:** with `npm run tauri dev` and a real daemon, if you can pair a phone, press **End** on the phone and confirm the notice appears and nothing reconnects until you press **Reconnect**. If you can't pair a phone, say so and name the OS.
+
 ## 6. Architecture and Karpathy pillars (enforced at review)
 
-- **Rust/React separation.** No native change apart from `devCsp`. Pages compose the existing feature components, and the features keep owning their behaviour.
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. List every prototype selector you did **not** port, and why.
-2. **Simplicity first.** One stylesheet, one icon component, one shell, two pages. No router, no CSS modules, no theme provider, no animation.
-3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `upkeep/UK-02-app-shell`, with atomic commits:
+- **Rust/React separation.** Rust already forwards the typed end events (AD-11). React derives notices from the store's `ended` list. Reconnect goes through the existing `DevicesPort`; there's no new port and no new command.
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`.
+2. **Simplicity first.** One component and one set in App. No context provider, no timers, no new CSS. Keep files under ~250 lines.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `upkeep/UK-03-end-states`, with atomic commits:
    - `test(desktop): …` red
    - `feat(desktop): …` green
-4. **Goal-driven TDD.** Commit the failing tests first. Paste the red excerpt and the green gate output in the PR, plus the CI links and the screenshots.
+4. **Goal-driven TDD.** Commit the failing tests first. Paste the red excerpt and the green gate output in the PR, plus the CI links.
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `feat(desktop): UK-02 app shell, navigation and styling`, with this body:
+Open one PR against `main` titled `feat(desktop): UK-03 Solo end states and Reconnect`, with this body:
 
 ```
-Ticket: UK-02 (docs/TDD_TICKETS.md §5a) · Reference: SCREENS.md layout, D03, D04; prototype styles.css
+Ticket: UK-03 (docs/TDD_TICKETS.md §5a) · Acceptance: P10 desktop half (peer_closed end state, no auto retry), JOURNEYS -32025/-32026 Solo wording, D07 manual Reconnect
 
 ## Assumptions & Trade-offs
 - …
@@ -180,10 +159,10 @@ OS: …
 <red run excerpt>
 <green gate output>
 <CI run links>
-<screenshots: Workspace, Devices, production preview console>
+<manual check, or "no phone available">
 
 ## Out of scope (left for later tickets)
-- workspace switcher (DT-14), topology diagram, tray (DT-09), Audit/Diagnostics/Settings pages (DT-11..DT-13), Solo end states (UK-03)
+- corporate codes and SSO (DT-16), tray (DT-09), robustness nits (UK-04)
 ```
 
-Then **stop immediately**. Don't start UK-03, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start DT-09, don't edit `docs/`, and don't merge.
