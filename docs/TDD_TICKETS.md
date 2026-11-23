@@ -23,7 +23,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] UK-02 · App shell: navigation rail, pages and styling · Done in [#29](https://github.com/SumukhaK/Setu-Desktop/pull/29)
 - [x] UK-03 · Solo end states and Reconnect · Done in [#31](https://github.com/SumukhaK/Setu-Desktop/pull/31)
 - [ ] UK-04 · Robustness nits · before DT-10
-- [ ] DT-09 · Tray and background
+- [x] DT-09 · Tray and background · Done in [#33](https://github.com/SumukhaK/Setu-Desktop/pull/33)
 - [ ] DT-10 · Android 11+ debugger pairing
 - [ ] DT-11 · Diagnostics
 - [ ] DT-12 · Settings: relay, pin, proxy
@@ -335,14 +335,16 @@ Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 pro
 
 ### UK-04 · Robustness nits
 - **When:** before DT-10. DT-10 adds the redaction layer and reworks pairing flows, so it should start from a clean base.
-- **Files:** `src/features/pair/PairDialog.tsx`, `src/features/devices/DeviceList.tsx`, `DeviceDetail.tsx`, `src/features/session/RejoinBanner.tsx`, `src-tauri/src/events/hub.rs`, `src-tauri/build.rs`, plus the matching tests.
+- **Files:** `src/features/pair/PairDialog.tsx`, `src/features/devices/DeviceList.tsx`, `DeviceDetail.tsx`, `src/features/session/RejoinBanner.tsx`, `src-tauri/src/events/hub.rs`, `src-tauri/src/app/tray.rs`, `src-tauri/build.rs`, `src/App.tsx`, plus the matching tests.
 - **Tests first:**
   1. A rejected `invoke` in `PairDialog` shows "Couldn't reach the Setu service. Try again." and re-enables Connect. Today it sticks on "Connecting…". The same applies to `DeviceList`'s `list()` (show the list error with Refresh) and `DeviceDetail`'s `setNickname()` (show the save error); both are DT-08 nits.
   2. If `RejoinBanner`'s timeout fires 1 ms before `since + 10 s`, it re-arms and holding still appears. Add the redraw tick to the effect deps.
   3. The hub emits `Unavailable` once per loss, not on every 1 s failed retry (`hub.rs` connect, subscribe and list error paths).
   4. `build.rs` finds `WebView2Loader.dll`'s target dir by walking `OUT_DIR` ancestors to the directory named `$PROFILE`, not a fixed 4 levels, so older Cargo layouts work.
   5. `PairDialog` unmounts on a page switch, so a typed code or a pending connect is lost; only the open flag survives (UK-02 review nit). Keep the dialog's draft in App, or block navigation while a connect is pending.
-- **Out of scope:** behaviour changes beyond these five.
+  6. The tray's left click restores the window without also opening the menu (`show_menu_on_left_click(false)`; DT-09 review nit).
+  7. A rejected `app_quit` invoke resets the UI quit guard and shows "Couldn't quit Setu. Try again." (DT-09 review nit).
+- **Out of scope:** behaviour changes beyond these seven.
 
 ---
 
