@@ -8,31 +8,37 @@
 pub mod status;
 
 #[cfg(not(test))]
+mod tray;
+
+#[cfg(not(test))]
 mod shell {
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, PoisonError};
     use std::time::Duration;
 
-    use tauri::{Emitter, Manager};
+    use tauri::{Emitter, Manager, WindowEvent};
     use tokio::sync::watch;
 
     use crate::adb::{self, AdbConnectOutcome, AdbSnapshot, AdbWatcher};
     use crate::app::status::{resolve_daemon_path, resolve_relay, status_of, AppStatus};
+    use crate::app::tray::{setup_tray, show_main};
     use crate::commands::devices::{
         forget_device, list_devices, set_nickname, ForgetOutcome, ListOutcome, NicknameOutcome,
     };
+    use crate::commands::quit::{end_all_sessions, QuitLatch};
     use crate::commands::session::{connect_with_device, stop_session, StopOutcome};
     use crate::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
     use crate::events::{start as start_event_hub, EventHub};
     use crate::store::nicknames::NicknameStore;
 
-    struct AppState {
+    pub(crate) struct AppState {
         status: Mutex<AppStatus>,
         supervisor: Option<Supervisor>,
-        hub: Option<EventHub>,
+        pub(crate) hub: Option<EventHub>,
         pending: PendingConnect,
         nicknames: NicknameStore,
+        quit_latch: QuitLatch,
         _adb: AdbWatcher,
         adb_status: watch::Receiver<AdbSnapshot>,
     }
@@ -137,18 +143,50 @@ mod shell {
         Ok(adb::adb_connect(&adb, &adb_addr, Duration::from_secs(10)).await)
     }
 
+    #[tauri::command]
+    fn window_hide(app: tauri::AppHandle) {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+    }
+
+    #[tauri::command]
+    async fn app_quit(
+        app: tauri::AppHandle,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<(), String> {
+        if !state.quit_latch.try_begin() {
+            return Ok(());
+        }
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            end_all_sessions(ready_client(&state)),
+        )
+        .await;
+        if let Some(supervisor) = &state.supervisor {
+            supervisor.stop().await;
+        }
+        app.exit(0);
+        Ok(())
+    }
+
     /// Start the window and, when a relay is configured, the Solo supervisor.
     ///
-    /// Dropping the app never stops the daemon (P17); DT-09 adds tray and quit.
+    /// Closing the window hides it to the tray; the daemon and its sessions
+    /// keep running until Quit (P17).
     pub fn run() {
         let result = tauri::Builder::default()
             .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main(app);
             }))
+            .on_window_event(|window, event| {
+                if window.label() == "main" {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            })
             .invoke_handler(tauri::generate_handler![
                 daemon_status,
                 session_resync,
@@ -160,7 +198,9 @@ mod shell {
                 devices_forget,
                 device_set_nickname,
                 adb_status,
-                adb_connect
+                adb_connect,
+                window_hide,
+                app_quit
             ])
             .setup(|app| {
                 let relay = resolve_relay(
@@ -226,9 +266,12 @@ mod shell {
                     hub: hub_pair.as_ref().map(|(hub, _)| hub.clone()),
                     pending: PendingConnect::default(),
                     nicknames,
+                    quit_latch: QuitLatch::default(),
                     _adb: watcher,
                     adb_status: adb_status.clone(),
                 });
+
+                setup_tray(app.handle())?;
 
                 {
                     let handle = app.handle().clone();
