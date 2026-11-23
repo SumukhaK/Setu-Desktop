@@ -73,7 +73,7 @@ export function DeviceDetail({
   }
 
   return (
-    <div>
+    <div className="card device-detail">
       <h3>{device.device_id}</h3>
       <label>
         Nickname
@@ -86,13 +86,18 @@ export function DeviceDetail({
       </label>
       <button
         type="button"
+        className="button secondary"
         onClick={() => {
           void save();
         }}
       >
         Save
       </button>
-      {nicknameError !== null && <p role="alert">{nicknameError}</p>}
+      {nicknameError !== null && (
+        <p role="alert" className="notice">
+          {nicknameError}
+        </p>
+      )}
 
       {connected ? (
         <p>Connected</p>
@@ -101,6 +106,7 @@ export function DeviceDetail({
           <p>Connecting…</p>
           <button
             type="button"
+            className="button quiet"
             onClick={() => {
               void port.cancelConnect();
             }}
@@ -111,6 +117,7 @@ export function DeviceDetail({
       ) : (
         <button
           type="button"
+          className="button primary"
           onClick={() => {
             void connect();
           }}
@@ -118,11 +125,16 @@ export function DeviceDetail({
           Connect
         </button>
       )}
-      {connectError !== null && <p role="alert">{connectError}</p>}
+      {connectError !== null && (
+        <p role="alert" className="notice">
+          {connectError}
+        </p>
+      )}
 
       {!confirming && (
         <button
           type="button"
+          className="button quiet danger"
           onClick={() => {
             setConfirming(true);
           }}
@@ -135,6 +147,7 @@ export function DeviceDetail({
           <p>{FORGET_COPY}</p>
           <button
             type="button"
+            className="button primary danger-fill"
             disabled={forgetting}
             onClick={() => {
               void forget();
@@ -144,6 +157,7 @@ export function DeviceDetail({
           </button>
           <button
             type="button"
+            className="button secondary"
             onClick={() => {
               setConfirming(false);
             }}
@@ -152,7 +166,11 @@ export function DeviceDetail({
           </button>
         </>
       )}
-      {forgetError !== null && <p role="alert">{forgetError}</p>}
+      {forgetError !== null && (
+        <p role="alert" className="notice">
+          {forgetError}
+        </p>
+      )}
     </div>
   );
 }

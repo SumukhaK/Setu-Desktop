@@ -25,7 +25,7 @@ export function StatusStrip({ session, adb }: { session: LiveSession; adb: AdbSn
   const transportFact = source === "audit" ? `${label} (from audit log)` : label;
 
   return (
-    <ul aria-label="Session status">
+    <ul aria-label="Session status" className="signal-strip">
       <li>{`Listener: ${listenerLabels[session.status]}`}</li>
       <li>{`Local ADB: ${adbLabels[attachmentOf(session.adbAddr, adb)]}`}</li>
       <li>{`Transport: ${transportFact}`}</li>

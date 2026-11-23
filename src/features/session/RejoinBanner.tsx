@@ -43,7 +43,7 @@ export function RejoinBanner({
     const suffix =
       attachmentOf(session.adbAddr, adb) === "attached" ? " Local ADB is still attached." : "";
     return (
-      <p role="status">
+      <p role="status" className="notice warning">
         {`Phone connection interrupted. Setu is holding this session while it reconnects.${suffix}`}
       </p>
     );
@@ -51,10 +51,11 @@ export function RejoinBanner({
 
   if (view.kind === "lost") {
     return (
-      <div role="alert">
+      <div role="alert" className="notice warning">
         <p>{"The phone is unreachable. ADB will need to reattach when it's back."}</p>
         <button
           type="button"
+          className="button quiet"
           onClick={() => {
             setDismissed((current) => new Set(current).add(view.tunnelId));
           }}

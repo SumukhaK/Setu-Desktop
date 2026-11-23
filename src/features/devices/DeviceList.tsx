@@ -47,41 +47,46 @@ export function DeviceList({
   }, [load]);
 
   return (
-    <section aria-labelledby="saved-devices-heading">
+    <section aria-labelledby="saved-devices-heading" className="card device-card">
       <h2 id="saved-devices-heading">Saved devices</h2>
       {message !== null && (
         <>
-          <p role="alert">{message}</p>
-          <button type="button" onClick={changed}>
+          <p role="alert" className="notice">
+            {message}
+          </p>
+          <button type="button" className="button secondary" onClick={changed}>
             Refresh
           </button>
         </>
       )}
       {devices.length === 0 && message === null && (
-        <p>No saved devices yet. Pair a phone to add it.</p>
+        <p className="device-empty">No saved devices yet. Pair a phone to add it.</p>
       )}
-      {devices.map((device) => (
-        <div key={device.device_id}>
-          <button
-            type="button"
-            onClick={() => {
-              setSelected(device.device_id);
-            }}
-          >
-            {device.nickname !== null
-              ? `${device.nickname} · ${device.device_id} · Presence unknown`
-              : `${device.device_id} · Presence unknown`}
-          </button>
-          {selected === device.device_id && (
-            <DeviceDetail
-              device={device}
-              connected={liveDeviceIds.includes(device.device_id)}
-              port={port}
-              onChanged={changed}
-            />
-          )}
-        </div>
-      ))}
+      <div className="list">
+        {devices.map((device) => (
+          <div key={device.device_id}>
+            <button
+              type="button"
+              className="list-row"
+              onClick={() => {
+                setSelected(device.device_id);
+              }}
+            >
+              {device.nickname !== null
+                ? `${device.nickname} · ${device.device_id} · Presence unknown`
+                : `${device.device_id} · Presence unknown`}
+            </button>
+            {selected === device.device_id && (
+              <DeviceDetail
+                device={device}
+                connected={liveDeviceIds.includes(device.device_id)}
+                port={port}
+                onChanged={changed}
+              />
+            )}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
