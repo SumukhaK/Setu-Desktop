@@ -21,7 +21,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] DT-08 · Devices list, forget and nicknames (solo) · Done in [#24](https://github.com/SumukhaK/Setu-Desktop/pull/24)
 - [x] UK-01 · CI and real-daemon smoke test · Done in [#26](https://github.com/SumukhaK/Setu-Desktop/pull/26)
 - [x] UK-02 · App shell: navigation rail, pages and styling · Done in [#29](https://github.com/SumukhaK/Setu-Desktop/pull/29)
-- [ ] UK-03 · Solo end states and Reconnect · after UK-02, before DT-09
+- [x] UK-03 · Solo end states and Reconnect · Done in [#31](https://github.com/SumukhaK/Setu-Desktop/pull/31)
 - [ ] UK-04 · Robustness nits · before DT-10
 - [ ] DT-09 · Tray and background
 - [ ] DT-10 · Android 11+ debugger pairing
@@ -230,7 +230,8 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **SDK binding:** `devices.list`, `devices.forget {device_id}`, `session.connect {device_id}`.
 
 ### DT-09 · Tray and background
-- **Files:** `src-tauri/src/tray.rs`, `src/app/windowLifecycle.ts`.
+- **Files:** `src-tauri/src/app/tray.rs` (AD-1), `src-tauri/src/commands/quit.rs`, `src/app/windowLifecycle.ts`, `src/app/QuitConfirm.tsx`.
+- **Note (2026-11-23):** daemon v1.1.0 has no shutdown RPC and `Supervisor::stop()` only kills a daemon this app spawned. Quit ends every session (`session.list` + `session.stop`), then stops the supervisor; an attached daemon stays up with no sessions.
 - **Tests first:** P17 (close hides the window and keeps the daemon and session; restore returns to the same session; Quit stops the daemon after confirming that live sessions will end).
 - **SDK binding:** `session.list` on restore, `session.stop`.
 
@@ -404,5 +405,5 @@ Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 pro
 
 - **Org token service** (required before DT-14 ships): takes an OIDC identity plus `identity.public_key` and returns an EdDSA Setu JWT with `cnf.key` binding and a short expiry; the refresher writes `--identity-file`.
 - **EMM rollout guide:** push per-device policy from `GET /v1/policy?device=<id>`; `relay_pin` mandatory in corporate.
-- **SDK v1.1.1 requests:** (1) `peer_user` (verified subject) and `peer_fingerprint` on `session_open` / `DeviceSession`; (2) `transport` on `session_up` or a `stream_open` event; (3) `expires_at` on `SessionInfo` / `session_up` when a cap applies; (4) solo `trustedDesktops()` / `revokeDesktop()` on the phone.
+- **SDK v1.1.1 requests:** (1) `peer_user` (verified subject) and `peer_fingerprint` on `session_open` / `DeviceSession`; (2) `transport` on `session_up` or a `stream_open` event; (3) `expires_at` on `SessionInfo` / `session_up` when a cap applies; (4) solo `trustedDesktops()` / `revokeDesktop()` on the phone; (5) a daemon `shutdown` RPC (or exit when the last authenticated client asks), so Quit can stop a daemon the app attached to rather than spawned.
 - **Device lab gate** before enabling DT-10 by default: Pixel (Android 15, Wi-Fi), Samsung (Android 14), Xiaomi (Android 10 tcpip, cellular), and one ColorOS phone. Cover pairing, a 60 s airplane-mode outage, `endSession`, and session cap expiry.
