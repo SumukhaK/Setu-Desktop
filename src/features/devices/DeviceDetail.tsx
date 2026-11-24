@@ -27,12 +27,16 @@ export function DeviceDetail({
 
   async function save() {
     setNicknameError(null);
-    const outcome = await port.setNickname(device.device_id, nickname);
-    if (outcome.outcome === "saved") {
-      onChanged();
-    } else if (outcome.outcome === "invalid") {
-      setNicknameError("Use 1–40 characters, or leave it empty to remove the nickname.");
-    } else {
+    try {
+      const outcome = await port.setNickname(device.device_id, nickname);
+      if (outcome.outcome === "saved") {
+        onChanged();
+      } else if (outcome.outcome === "invalid") {
+        setNicknameError("Use 1–40 characters, or leave it empty to remove the nickname.");
+      } else {
+        setNicknameError("Couldn't save this nickname. Try again.");
+      }
+    } catch {
       setNicknameError("Couldn't save this nickname. Try again.");
     }
   }

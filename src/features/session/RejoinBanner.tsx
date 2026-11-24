@@ -16,13 +16,14 @@ export function RejoinBanner({
   clock: Clock;
 }) {
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set<string>());
-  const [, redraw] = useState(0);
+  const [tick, redraw] = useState(0);
   const view = rejoinViewOf(session, clock.now(), dismissed);
 
   // The only moment the view can change without an event is the 10 s holding
-  // boundary. One timeout, cleared whenever the session's tunnels change.
-  // The store replaces the session object on every path event, so depending
-  // on `session` here is keyed on the same tunnel facts.
+  // boundary. One timeout, cleared whenever the session's tunnels change. The
+  // tick is a dependency, so a redraw that fires just short of the boundary
+  // re-evaluates `nextWakeAt` and arms the missing last timer instead of
+  // waiting for the next event (UK-04).
   useEffect(() => {
     const wake = nextWakeAt(session, clock.now());
     if (wake === null) {
@@ -30,14 +31,14 @@ export function RejoinBanner({
     }
     const timer = setTimeout(
       () => {
-        redraw((tick) => tick + 1);
+        redraw((current) => current + 1);
       },
       Math.max(0, wake - clock.now()),
     );
     return () => {
       clearTimeout(timer);
     };
-  }, [session, clock]);
+  }, [session, clock, tick]);
 
   if (view.kind === "holding") {
     const suffix =

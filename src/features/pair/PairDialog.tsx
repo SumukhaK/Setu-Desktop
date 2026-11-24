@@ -1,15 +1,38 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { parseCodeInput } from "./codeFormat";
 import { outcomeMessage } from "./pairPort";
 import type { ConnectOutcome, PairPort } from "./pairPort";
 
-export function PairDialog({ port, onClose }: { port: PairPort; onClose: () => void }) {
-  const [raw, setRaw] = useState("");
+export function PairDialog({
+  port,
+  draft,
+  onDraftChange,
+  onClose,
+}: {
+  port: PairPort;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onClose: () => void;
+}) {
   const [connecting, setConnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const parsed = parseCodeInput(raw);
+  const parsed = parseCodeInput(draft);
   const canConnect = parsed.code !== null && !connecting;
+  // Unmounting with a connect still in flight cancels it, exactly like the
+  // Cancel button; a settled connect must not be cancelled on its way out.
+  const settled = useRef(false);
+
+  useEffect(() => {
+    if (!connecting) {
+      return;
+    }
+    return () => {
+      if (!settled.current) {
+        void port.cancel();
+      }
+    };
+  }, [connecting, port]);
 
   async function connect() {
     const code = parsed.code;
@@ -17,14 +40,22 @@ export function PairDialog({ port, onClose }: { port: PairPort; onClose: () => v
       return;
     }
     setMessage(null);
+    settled.current = false;
     setConnecting(true);
-    const outcome: ConnectOutcome = await port.connect(code);
-    setConnecting(false);
-    if (outcome.outcome === "connected" || outcome.outcome === "cancelled") {
-      onClose();
-      return;
+    try {
+      const outcome: ConnectOutcome = await port.connect(code);
+      settled.current = true;
+      if (outcome.outcome === "connected" || outcome.outcome === "cancelled") {
+        onClose();
+        return;
+      }
+      setMessage(outcomeMessage(outcome));
+    } catch {
+      settled.current = true;
+      setMessage("Couldn't reach the Setu service. Try again.");
+    } finally {
+      setConnecting(false);
     }
-    setMessage(outcomeMessage(outcome));
   }
 
   async function cancel() {
@@ -46,7 +77,7 @@ export function PairDialog({ port, onClose }: { port: PairPort; onClose: () => v
           id="pair-code"
           value={parsed.display}
           onChange={(event) => {
-            setRaw(event.target.value);
+            onDraftChange(event.target.value);
             setMessage(null);
           }}
           inputMode="numeric"

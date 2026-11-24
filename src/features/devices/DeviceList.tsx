@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DeviceDetail } from "./DeviceDetail";
 import { listMessage } from "./devicesPort";
-import type { DeviceRow, DevicesPort } from "./devicesPort";
+import type { DeviceRow, DevicesPort, ListOutcome } from "./devicesPort";
 
 export function DeviceList({
   port,
@@ -19,7 +19,15 @@ export function DeviceList({
 
   const load = useCallback(async () => {
     const current = ++request.current;
-    const outcome = await port.list();
+    let outcome: ListOutcome;
+    try {
+      outcome = await port.list();
+    } catch {
+      if (current === request.current) {
+        setMessage("Couldn't load saved devices. Try again.");
+      }
+      return;
+    }
     if (current !== request.current) {
       return;
     }

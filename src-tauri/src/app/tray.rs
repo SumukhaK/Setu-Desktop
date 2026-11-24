@@ -28,7 +28,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit Setu", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
-    let mut builder = TrayIconBuilder::new().menu(&menu).tooltip("Setu");
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .tooltip("Setu")
+        .show_menu_on_left_click(false);
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
