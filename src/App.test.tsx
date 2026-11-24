@@ -681,3 +681,82 @@ describe("App tray and quit (DT-09)", () => {
     expect(window.unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("App robustness (UK-04)", () => {
+  it("keeps the pairing draft across a Devices round trip", () => {
+    const { hub } = fakeHub();
+    render(
+      <App port={daemonPort} hubPort={hub} pairPort={pairPort} devicesPort={fakeDevicesPort()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pair new device" }));
+    fireEvent.change(screen.getByLabelText("Pairing code"), {
+      target: { value: "0012345678" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+
+    expect(screen.getByLabelText<HTMLInputElement>("Pairing code").value).toBe("0012-345678");
+  });
+
+  it("cancels a pending connect when the Workspace page is left", () => {
+    const connect = vi.fn(() => new Promise<ConnectOutcome>(() => undefined));
+    const cancel = vi.fn(() => Promise.resolve(true));
+    const port: PairPort = { connect, cancel };
+    const { hub } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} pairPort={port} devicesPort={fakeDevicesPort()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pair new device" }));
+    fireEvent.change(screen.getByLabelText("Pairing code"), {
+      target: { value: "0012345678" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(screen.getByText("Connecting…")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the draft when the dialog closes", () => {
+    render(<App port={daemonPort} hubPort={hubPort} pairPort={pairPort} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pair new device" }));
+    fireEvent.change(screen.getByLabelText("Pairing code"), {
+      target: { value: "0012345678" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Pairing code")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Pair new device" }));
+
+    expect(screen.getByLabelText<HTMLInputElement>("Pairing code").value).toBe("");
+  });
+
+  it("a rejected quit shows the alert and a second request retries", async () => {
+    let notify: () => void = () => undefined;
+    const unsubscribe = vi.fn(() => undefined);
+    const quit = vi.fn(() => Promise.reject(new Error("ipc")));
+    const hide = vi.fn(() => Promise.resolve());
+    const onQuitRequested = vi.fn((cb: () => void) => {
+      notify = cb;
+      return Promise.resolve(unsubscribe);
+    });
+    const port: WindowPort = { hide, quit, onQuitRequested };
+    render(<App port={daemonPort} hubPort={hubPort} windowPort={port} />);
+    await waitFor(() => {
+      expect(onQuitRequested).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      notify();
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't quit Setu. Try again.");
+    expect(quit).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      notify();
+    });
+    await waitFor(() => {
+      expect(quit).toHaveBeenCalledTimes(2);
+    });
+  });
+});
