@@ -760,3 +760,15 @@ describe("App robustness (UK-04)", () => {
     });
   });
 });
+
+describe("App pair-adb flag (DT-10)", () => {
+  it("shows no Pair debugger without a pairAdbPort", async () => {
+    const { hub, push } = fakeHub();
+    render(<App port={daemonPort} hubPort={hub} />);
+    act(() => {
+      push(liveSnapshot);
+    });
+    expect(await screen.findByRole("article")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pair debugger" })).toBeNull();
+  });
+});

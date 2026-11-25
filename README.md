@@ -21,6 +21,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+For the device-lab-only Android 11+ debugger pairing UI, build and run with `VITE_SETU_ADB_PAIR=1 npm run tauri dev`.
+
 ## Real-daemon smoke test
 
 `src-tauri/tests/e2e_real_daemon.rs` drives the Rust core against a real Setu-SDK v1.1.0 relay, phone agent and daemon. It reports a skip unless `SETU_E2E_BIN_DIR` is set, so the ordinary `cargo test` run stays fast. To run it locally, build the SDK binaries from the `v1.1.0` tag and point the test at them:

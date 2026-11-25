@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Clock } from "../../state/clock";
 import type { LiveSession } from "../../state/sessionStore";
-import type { AdbPort } from "../adb/adbStatus";
+import type { AdbPort, AdbSnapshot } from "../adb/adbStatus";
+import type { PairAdbOutcome, PairAdbPort } from "../pair-adb/pairAdbPort";
 import { SessionCard } from "./SessionCard";
 import type { SessionPort, StopOutcome } from "./sessionPort";
 
@@ -195,5 +196,107 @@ describe("SessionCard", () => {
     expect(screen.getByText("Transport: LAN (direct)")).toBeInTheDocument();
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("hides Pair debugger without a port or when ADB is attached", () => {
+    const notAttached: AdbSnapshot = { server: "up", devices: [] };
+    const { rerender } = render(
+      <SessionCard
+        session={session()}
+        adb={notAttached}
+        clock={clock}
+        adbPort={adbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Pair debugger" })).toBeNull();
+
+    const pairAdbPort: PairAdbPort = {
+      pair: () => Promise.resolve({ outcome: "paired", transport: "lan" }),
+      cancel: () => Promise.resolve(true),
+    };
+    rerender(
+      <SessionCard
+        session={session()}
+        adb={notAttached}
+        clock={clock}
+        adbPort={adbPort}
+        pairAdbPort={pairAdbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Pair debugger" })).toBeInTheDocument();
+
+    rerender(
+      <SessionCard
+        session={session()}
+        adb={{ server: "up", devices: [{ serial: ADDR, state: "device" }] }}
+        clock={clock}
+        adbPort={adbPort}
+        pairAdbPort={pairAdbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Pair debugger" })).toBeNull();
+  });
+
+  it("pairs the debugger, shows the status line and hides it once attached", async () => {
+    const pair = vi.fn((): Promise<PairAdbOutcome> =>
+      Promise.resolve({ outcome: "paired", transport: "lan" }),
+    );
+    const pairAdbPort: PairAdbPort = { pair, cancel: () => Promise.resolve(true) };
+    const notAttached: AdbSnapshot = { server: "up", devices: [] };
+    const { rerender } = render(
+      <SessionCard
+        session={session()}
+        adb={notAttached}
+        clock={clock}
+        adbPort={adbPort}
+        pairAdbPort={pairAdbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pair debugger" }));
+    fireEvent.change(screen.getByLabelText("Pairing code"), {
+      target: { value: "482913" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Pair" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Debugger paired. Use Connect ADB to attach.",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(pair).toHaveBeenCalledWith("pixel-7", "482913", null);
+
+    rerender(
+      <SessionCard
+        session={session()}
+        adb={{ server: "up", devices: [{ serial: ADDR, state: "device" }] }}
+        clock={clock}
+        adbPort={adbPort}
+        pairAdbPort={pairAdbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+
+    rerender(
+      <SessionCard
+        session={session()}
+        adb={notAttached}
+        clock={clock}
+        adbPort={adbPort}
+        pairAdbPort={pairAdbPort}
+        sessionPort={{ stop: () => Promise.resolve({ outcome: "stopped" }) }}
+        clipboard={{ writeText: () => Promise.resolve() }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pair debugger" }));
+    expect(screen.getByLabelText<HTMLInputElement>("Pairing code").value).toBe("");
   });
 });

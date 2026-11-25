@@ -11,6 +11,7 @@ import type {
   NicknameOutcome,
 } from "../features/devices/devicesPort";
 import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
+import type { PairAdbOutcome, PairAdbPort } from "../features/pair-adb/pairAdbPort";
 import type { SessionPort, StopOutcome } from "../features/session/sessionPort";
 import type { HubMessage } from "../state/sessionStore";
 import type { SessionHubPort } from "../state/useSessions";
@@ -29,6 +30,19 @@ export const tauriDaemonPort: DaemonPort = {
 export const tauriPairPort: PairPort = {
   connect(code) {
     return invoke<ConnectOutcome>("session_connect_code", { code });
+  },
+  cancel() {
+    return invoke<boolean>("session_cancel_connect");
+  },
+};
+
+export const tauriPairAdbPort: PairAdbPort = {
+  pair(deviceId, code, port) {
+    return invoke<PairAdbOutcome>("session_pair_adb", {
+      deviceId,
+      pairingCode: code,
+      pairingPort: port,
+    });
   },
   cancel() {
     return invoke<boolean>("session_cancel_connect");

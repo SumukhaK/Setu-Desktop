@@ -2,6 +2,7 @@ import { StatusStrip } from "../daemon/StatusStrip";
 import type { DaemonPort } from "../daemon/status";
 import type { AdbPort, AdbSnapshot } from "../features/adb/adbStatus";
 import { PairDialog } from "../features/pair/PairDialog";
+import type { PairAdbPort } from "../features/pair-adb/pairAdbPort";
 import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
 import { EndedNotice } from "../features/session/EndedNotice";
 import { SessionCard } from "../features/session/SessionCard";
@@ -24,6 +25,7 @@ export function WorkspacePage({
   sessionPort,
   clipboard,
   pairPort,
+  pairAdbPort,
   pairing,
   onPair,
   onPairingClose,
@@ -42,6 +44,7 @@ export function WorkspacePage({
   sessionPort: SessionPort;
   clipboard: { writeText(s: string): Promise<void> };
   pairPort?: PairPort;
+  pairAdbPort?: PairAdbPort;
   pairing: boolean;
   onPair: () => void;
   onPairingClose: () => void;
@@ -87,6 +90,7 @@ export function WorkspacePage({
           adb={adb}
           clock={clock}
           adbPort={adbPort}
+          pairAdbPort={pairAdbPort}
           sessionPort={sessionPort}
           clipboard={clipboard}
         />
