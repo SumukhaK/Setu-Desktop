@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-25 · main @ `1a140de` (UK-04 merged, DT-10 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-25 · main @ `10986c3` (DT-10 merged, DT-11 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -32,6 +32,7 @@ src/                                   React UI (Vite root; AD-9)
   daemon/status.ts StatusStrip.tsx     DaemonStatus, DaemonPort, statusLabel(), useDaemonStatus(port); strip is role="status", "Checking…" until first status
   features/adb/                       adbStatus (AdbSnapshot mirror, attachmentOf exact serial, labels), useAdbStatus, SessionAdbLine (+ Connect ADB)
   features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog (draft held in App, unmount cancels a pending connect)
+  features/pair-adb/                  pairAdbPort (PairAdbOutcome mirror, parseAdbPairInput, pairAdbMessage), PairAdbDialog (code local to the dialog; unmount cancels); opened from SessionCard via SessionAdbLine's Pair debugger; flag VITE_SETU_ADB_PAIR=1
   features/devices/                  devicesPort (List/Forget/Nickname outcome mirrors, messages), DeviceList (request counter), DeviceDetail (inline forget confirm)
   features/session/                   transport (transportOf path>audit>unknown, transportLabel), StatusStrip, sessionPort (StopOutcome, stopMessage), SessionCard(clock), rejoinMachine (rejoinViewOf, nextWakeAt), RejoinBanner, EndedNotice (UK-03)
   state/                               clock (Clock, systemClock), sessionStore (HubMessage mirrors, pure reduce(state, msg, now)), useSessions(port, clock): subscribe, then resync()
@@ -46,24 +47,23 @@ src-tauri/                             lib `setu_desktop` + bin `setu-desktop` (
   src/adb/track.rs                     watcher: host:track-devices-l, AdbSnapshot Unknown|Down|Up{devices}, backoff 0.5→5 s, never starts adb
   src/adb/connect.rs                   resolve_adb_path (SETU_ADB_PATH|adb), resolve_adb_server (ANDROID_ADB_SERVER_PORT|5037), adb_connect → AdbConnectOutcome
   tests/adb_track.rs tests/adb_connect.rs  7 + 6 tests; support: fake_adb_server.rs, fake_adb.rs ([[bin]] fake-adb)
+  src/log/redact.rs                    redact(): NNNN-NNNNNN, exact 6-digit runs, pairing_code/token/auth_token JSON values (hand-scanned); the one native text choke point
   src/store/nicknames.rs               NicknameStore (AD-14), normalize_nickname → InvalidNickname
   src/commands/devices.rs              DeviceRow, List/Forget/NicknameOutcome, valid_device_id, list_devices, forget_device, set_nickname
-  src/commands/session.rs quit.rs      PairingCode (no Debug), ConnectOutcome, PendingConnect slot (token, sender), connect_with_code/device, cancel_pending, StopOutcome, stop_session; quit: end_all_sessions (list + stop each, NoSession = stopped) → QuitOutcome, QuitLatch
+  src/commands/session.rs quit.rs pair_adb.rs  PairingCode/AdbPairCode (no Debug), ConnectOutcome, PendingConnect slot shared by connect, connect-by-id and pair_adb, StopOutcome; quit: end_all_sessions → QuitOutcome, QuitLatch; pair_adb → PairAdbOutcome (never sends adb_path, drops output)
   tests/e2e_real_daemon.rs            real relay + phone agent + daemon; skips without SETU_E2E_BIN_DIR. Hold one adb_addr stream open across an outage: path events are per tunnel
   tests/session_commands.rs quit_commands.rs  12 + 8 tests (pairing P02/P19, stop P17, no code leak; Quit ends all, latch)
   src/events/model.rs                  SessionInfo, HubEvent (10-type allowlist incl. audit_session_start), HubMessage, parse_notification, parse_session_list
   src/events/gate.rs                   ResyncGate: epoch, Live | Resyncing{buffer, again}
   src/events/hub.rs                    EventHub task: dedicated connection, subscribe → list → ordered forward, 1 s retry; tests/event_hub.rs: 9 (wire order, P21, P18, P17, close, auth)
   src/rpc/framing.rs client.rs         encode(), LineDecoder (1 MiB cap); RpcClient, Notification, VersionInfo
-  src/rpc/errors.rs                    SetuError, from_error_object()
-  tests/rpc_client.rs                  13 client tests (order, busy, notifications, disconnect, drop)
-  tests/support/fake_daemon.rs         FakeDaemon: in-process JSON-RPC line server on 127.0.0.1:0
+  src/rpc/errors.rs                    SetuError, from_error_object(); tests/rpc_client.rs: 13 (order, busy, notifications, disconnect, drop)
+  tests/support/fake_daemon.rs fake_setu_daemon.rs  FakeDaemon (in-process JSON-RPC on 127.0.0.1:0); [[bin]] fake-setu-daemon (FAKE_DAEMON_EXIT_AFTER_MS, _NO_READY, _ARGS_FILE)
   src/daemon/workspace.rs              Workspace (Solo | Corporate{org_slug}), state_dir(), attach record r/w (AD-7)
   src/daemon/config.rs                 DaemonConfig + CorporateFlags, to_args() (no Debug: proxy creds)
   src/daemon/ready_line.rs             parse() daemon_ready: loopback listen, version >= 1.1.0
   src/daemon/supervisor.rs             Supervisor: attach-or-spawn, auth, restart backoff, Failed after 5, stop()
-  tests/daemon_supervisor.rs           9 supervisor tests (P18 spawn/attach/stale/crash/timeout, P17 stop/drop/runtime shutdown, non-loopback record)
-  tests/support/fake_setu_daemon.rs    [[bin]] fake-setu-daemon (FAKE_DAEMON_EXIT_AFTER_MS, _NO_READY, _ARGS_FILE)
+  tests/daemon_supervisor.rs           9 supervisor tests (P18 spawn/attach/stale/crash/timeout, P17 stop/drop/runtime shutdown, non-loopback record); tests/pair_adb_commands.rs (DT-10)
 docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrough/
 ```
 
@@ -128,6 +128,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| DT-10 | [#37](https://github.com/SumukhaK/Setu-Desktop/pull/37) | Android 11+ `session.pair_adb` behind `VITE_SETU_ADB_PAIR=1`, shared pending slot, `log/redact.rs`. No review round. Nit: the port field lacks the JOURNEYS hint "Leave empty to let the phone find it". |
 | UK-04 | [#35](https://github.com/SumukhaK/Setu-Desktop/pull/35) | Seven nits: rejected invokes caught (PairDialog, DeviceList, DeviceDetail), RejoinBanner re-arms on tick, hub `Unavailable` once per generation, build.rs finds `$PROFILE` by name, PairDialog draft lives in App and unmount cancels a pending connect, tray left click restores only, Quit retry. No review round. |
 | DT-09 | [#33](https://github.com/SumukhaK/Setu-Desktop/pull/33) | Tray (Show/Quit), close hides, restore resyncs, Quit confirm in UI then `end_all_sessions` + `Supervisor::stop()`. No review round; builder caught the prompt's `-32012` error (`-32012` = NotPaired, `-32020` = NoSession). |
 | UK-03 | [#31](https://github.com/SumukhaK/Setu-Desktop/pull/31) | Solo end-state notices (peer_closed + reason, expired, abnormal), Dismiss kept in App, manual Reconnect via `DevicesPort.connect`, notice hides once the device is live again. No review round. |
@@ -143,8 +144,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 
 ## Open items
 
-- Active ticket: DT-10 · Android 11+ debugger pairing (prompt issued 2026-11-25). `log/redact.rs` (pure, hand-scanned: NNNN-NNNNNN, exact 6-digit runs, pairing_code/token JSON values), `commands/pair_adb.rs` (shares PendingConnect; never sends `adb_path`, daemon decodes params strictly), PairAdbDialog on the session card, behind `VITE_SETU_ADB_PAIR=1`. Then DT-11.
+- Active ticket: DT-11 · Diagnostics (prompt issued 2026-11-25). `commands/diagnostics.rs` run_doctor (30 s timeout, every string redacted; redact gains URL-userinfo and JWT rules), DiagnosticsPage on a new rail item, checks.ts labels and generic unknowns, Copy report. Then DT-12.
 - 2026-11-22 audit (TDD_TICKETS §5a): UK-01..UK-04 all done (#26, #29, #31, #35). v1.1.0 has no shutdown RPC: an attached daemon survives Quit with no sessions (SDK ask §7 item 5). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
 - Design rebase merged (#8): the phone's session label is now shown as **Connected as (unverified)** (peerLabel may be the desktop label, corporate user or key fingerprint). The T−5 minute warning hook (`setuDesktopSessionDeadline`) has no v1.1.0 source: native tickets must never feed it a credential `expires_at`. The page allowlist excludes `auth.set_token` and `identity.public_key` (native only, DT-14).
-- Merged `feature/*` and `upkeep/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
 - SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes. v1.1.0 prints only `daemon_ready` on stdout; if a future daemon writes more, recheck the drain thread on SDK upgrades.
