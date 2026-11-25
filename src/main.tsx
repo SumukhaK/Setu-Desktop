@@ -6,6 +6,7 @@ import {
   tauriAdbPort,
   tauriDaemonPort,
   tauriDevicesPort,
+  tauriDiagnosticsPort,
   tauriPairAdbPort,
   tauriPairPort,
   tauriSessionHubPort,
@@ -30,6 +31,7 @@ createRoot(root).render(
       sessionPort={tauriSessionPort}
       clipboard={navigator.clipboard}
       devicesPort={tauriDevicesPort}
+      diagnosticsPort={tauriDiagnosticsPort}
       windowPort={tauriWindowPort}
     />
   </StrictMode>,

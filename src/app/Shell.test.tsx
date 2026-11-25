@@ -6,7 +6,8 @@ import { Shell } from "./Shell";
 import type { Page } from "./Shell";
 
 function heading(page: Page) {
-  return <h1 tabIndex={-1}>{page === "workspace" ? "Workspace" : "Devices"}</h1>;
+  const title = page === "workspace" ? "Workspace" : page === "devices" ? "Devices" : "Diagnostics";
+  return <h1 tabIndex={-1}>{title}</h1>;
 }
 
 describe("Shell", () => {
@@ -68,6 +69,32 @@ describe("Shell", () => {
       </Shell>,
     );
     expect(screen.getByRole("heading", { level: 1, name: "Devices" })).toHaveFocus();
+  });
+
+  it("renders the Diagnostics item and focuses its heading", () => {
+    const onNavigate = vi.fn();
+    const view = render(
+      <Shell
+        page="workspace"
+        onNavigate={onNavigate}
+        items={["workspace", "devices", "diagnostics"]}
+      >
+        {heading("workspace")}
+      </Shell>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(onNavigate).toHaveBeenCalledWith("diagnostics");
+
+    view.rerender(
+      <Shell
+        page="diagnostics"
+        onNavigate={onNavigate}
+        items={["workspace", "devices", "diagnostics"]}
+      >
+        {heading("diagnostics")}
+      </Shell>,
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "Diagnostics" })).toHaveFocus();
   });
 });
 
