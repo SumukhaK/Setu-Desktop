@@ -169,4 +169,21 @@ mod tests {
         let input = "café 東京 — no digits";
         assert_eq!(redact(input), input);
     }
+
+    #[test]
+    fn redacts_url_userinfo_but_keeps_the_host() {
+        let url = format!("http://{}:{}@proxy.corp:3128", "alice", "pw");
+        assert_eq!(redact(&url), "http://[redacted]@proxy.corp:3128");
+        assert_eq!(redact("wss://relay.example.com/x"), "wss://relay.example.com/x");
+        assert_eq!(redact("user@example.com"), "user@example.com");
+    }
+
+    #[test]
+    fn redacts_jwt_shaped_tokens_without_touching_the_edges() {
+        let token = "eyJa.eyJb.sig";
+        assert_eq!(redact(&format!("before {token} after")), "before [redacted-jwt] after");
+        assert_eq!(redact("eyJ"), "eyJ");
+        let adjacent = format!("x{token}x");
+        assert_eq!(redact(&adjacent), adjacent);
+    }
 }

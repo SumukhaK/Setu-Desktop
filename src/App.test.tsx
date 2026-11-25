@@ -11,6 +11,7 @@ import type {
   NicknameOutcome,
 } from "./features/devices/devicesPort";
 import type { AdbPort } from "./features/adb/adbStatus";
+import type { DoctorOutcome, DiagnosticsPort } from "./features/diagnostics/diagnosticsPort";
 import type { ConnectOutcome, PairPort } from "./features/pair/pairPort";
 import type { SessionPort } from "./features/session/sessionPort";
 import type { Clock } from "./state/clock";
@@ -770,5 +771,30 @@ describe("App pair-adb flag (DT-10)", () => {
     });
     expect(await screen.findByRole("article")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pair debugger" })).toBeNull();
+  });
+});
+
+describe("App diagnostics (DT-11)", () => {
+  it("adds the rail item only with a diagnosticsPort and runs once on open", async () => {
+    const run = vi.fn((): Promise<DoctorOutcome> =>
+      Promise.resolve({
+        outcome: "report",
+        version: "1.1.0",
+        platform: "windows/amd64",
+        ok: true,
+        checks: [],
+      }),
+    );
+    const diagnosticsPort: DiagnosticsPort = { run };
+    const { rerender } = render(<App port={daemonPort} hubPort={hubPort} />);
+    expect(screen.queryByRole("button", { name: "Diagnostics" })).toBeNull();
+
+    rerender(<App port={daemonPort} hubPort={hubPort} diagnosticsPort={diagnosticsPort} />);
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "Diagnostics" })).toHaveFocus();
+    await waitFor(() => {
+      expect(run).toHaveBeenCalledTimes(1);
+    });
   });
 });
