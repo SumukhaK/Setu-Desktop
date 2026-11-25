@@ -96,4 +96,28 @@ describe("RejoinBanner", () => {
     unmount();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("re-arms when the boundary is 1 ms short at fire time", () => {
+    let fakeNow = 1000;
+    const laggingClock: Clock = { now: () => fakeNow };
+    render(<RejoinBanner session={session({ t1: down })} adb={null} clock={laggingClock} />);
+    expect(vi.getTimerCount()).toBe(1);
+
+    // The clock lags the fake timers by 1 ms: the first wake fires at
+    // since + 10000 by the timers, which the clock still reads as 9999.
+    act(() => {
+      vi.advanceTimersByTime(10000);
+      fakeNow += 9999;
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => {
+      vi.advanceTimersByTime(2);
+      fakeNow += 1;
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Phone connection interrupted. Setu is holding this session while it reconnects.",
+    );
+  });
 });

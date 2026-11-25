@@ -383,3 +383,49 @@ async fn connect_authenticated_rejects_non_loopback_and_a_missing_token() {
         Err(SetuError::Unauthorized)
     ));
 }
+
+#[tokio::test]
+async fn unavailable_is_announced_once_per_generation_until_a_snapshot() {
+    let mut h = Harness::new().await;
+    h.fake.reply_with("auth", json!({ "ok": true }));
+    h.fake.reply_with_error(
+        "events.subscribe",
+        json!({ "code": -32603, "message": "internal error" }),
+    );
+    h.ready(1, h.fake.addr()).await;
+
+    // Over 3+ retries (1 s apart) exactly one Unavailable arrives.
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let mut announced = 0;
+    while let Ok(Some(message)) = timeout(Duration::from_millis(100), h.messages.recv()).await {
+        if matches!(message, HubMessage::Unavailable { .. }) {
+            announced += 1;
+        }
+    }
+    assert_eq!(announced, 1, "one loss, one announcement");
+
+    // A later generation connects, lists and snapshots; its loss announces
+    // once more.
+    let fake2 = FakeDaemon::start().await;
+    let other2 = FakeDaemon::start().await;
+    let (client2, _notifications2) = RpcClient::connect(other2.addr()).await.unwrap();
+    fake2.reply_with("auth", json!({ "ok": true }));
+    fake2.reply_with("events.subscribe", json!({ "subscribed": true }));
+    fake2.reply_with("session.list", json!({ "sessions": [session_info("s2")] }));
+    h.tx.send(DaemonState::Ready {
+        client: client2,
+        listen: fake2.addr(),
+        generation: 2,
+        pid: 2,
+        attached: false,
+    })
+    .unwrap();
+    assert_eq!(snapshot_ids(&next(&mut h.messages).await), vec!["s2"]);
+
+    fake2.close().await;
+    match next(&mut h.messages).await {
+        HubMessage::Unavailable { generation } => assert_eq!(generation, 2),
+        other => panic!("expected an Unavailable after the loss, got {other:?}"),
+    }
+    expect_silent(&mut h.messages, 1500).await;
+}

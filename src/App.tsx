@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DevicesPage } from "./app/DevicesPage";
 import { QuitConfirm } from "./app/QuitConfirm";
@@ -53,6 +53,8 @@ export function App({
     () => new Set<string>(),
   );
   const [quitRequested, setQuitRequested] = useState(false);
+  const [quitError, setQuitError] = useState(false);
+  const [pairDraft, setPairDraft] = useState("");
   const quitStarted = useRef(false);
   const live = Object.values(sessions.live);
   const endedNotices = sessions.ended.filter(
@@ -73,6 +75,8 @@ export function App({
     void windowPort
       .onQuitRequested(() => {
         if (lifecycle.active) {
+          // A fresh quit request dismisses a stale failure alert.
+          setQuitError(false);
           setQuitRequested(true);
         }
       })
@@ -92,13 +96,26 @@ export function App({
     };
   }, [windowPort]);
 
-  useEffect(() => {
-    if (windowPort === undefined || !quitRequested || live.length !== 0 || quitStarted.current) {
+  // A rejected `app_quit` resets the guard so Quit can be retried, hides the
+  // confirm and shows the failure alert (UK-04).
+  const attemptQuit = useCallback(() => {
+    if (windowPort === undefined || quitStarted.current) {
       return;
     }
     quitStarted.current = true;
-    void windowPort.quit();
-  }, [windowPort, quitRequested, live.length]);
+    void windowPort.quit().catch(() => {
+      quitStarted.current = false;
+      setQuitRequested(false);
+      setQuitError(true);
+    });
+  }, [windowPort]);
+
+  useEffect(() => {
+    if (!quitRequested || live.length !== 0) {
+      return;
+    }
+    attemptQuit();
+  }, [windowPort, quitRequested, live.length, attemptQuit]);
 
   return (
     <Shell
@@ -106,15 +123,15 @@ export function App({
       onNavigate={setPage}
       items={devicesPort === undefined ? ["workspace"] : ["workspace", "devices"]}
     >
+      {quitError && (
+        <p role="alert" className="notice">
+          Couldn't quit Setu. Try again.
+        </p>
+      )}
       {quitRequested && live.length > 0 && (
         <QuitConfirm
           count={live.length}
-          onQuit={() => {
-            if (windowPort !== undefined && !quitStarted.current) {
-              quitStarted.current = true;
-              void windowPort.quit();
-            }
-          }}
+          onQuit={attemptQuit}
           onCancel={() => {
             setQuitRequested(false);
           }}
@@ -136,7 +153,10 @@ export function App({
           }}
           onPairingClose={() => {
             setPairing(false);
+            setPairDraft("");
           }}
+          pairDraft={pairDraft}
+          onPairDraftChange={setPairDraft}
           ended={endedNotices}
           onDismissEnded={(sessionId) => {
             setDismissedEnded((current) => new Set(current).add(sessionId));
