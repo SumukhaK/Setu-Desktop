@@ -2,7 +2,7 @@
 
 Read this first. It replaces a repo scan. Keep it under 150 lines; update it in every post-merge ritual.
 
-Last updated: 2026-11-23 · main @ `075410f` (DT-09 merged, UK-04 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
+Last updated: 2026-11-25 · main @ `1a140de` (UK-04 merged, DT-10 prompt issued) · SDK baseline: Setu-SDK v1.1.0 (`SumukhaK/Setu` tag `v1.1.0`, commit `921aded`)
 
 ## Pipeline
 
@@ -29,10 +29,9 @@ package.json vite.config.ts tsconfig.json eslint.config.js .prettierrc.json
 src/                                   React UI (Vite root; AD-9)
   index.html main.tsx App.tsx          App: page state (workspace|devices), hooks + pairing open flag stay here; main.tsx imports styles/app.css
   app/                                 Shell (chrome, rail, aria-current nav, focus h1), Icon, WorkspacePage (+ Move to tray), DevicesPage, QuitConfirm, windowLifecycle (WindowPort); styles/app.css = prototype tokens
-  daemon/status.ts                     DaemonStatus, DaemonPort, statusLabel(), useDaemonStatus(port)
-  daemon/StatusStrip.tsx               role="status", "Checking…" until first status
+  daemon/status.ts StatusStrip.tsx     DaemonStatus, DaemonPort, statusLabel(), useDaemonStatus(port); strip is role="status", "Checking…" until first status
   features/adb/                       adbStatus (AdbSnapshot mirror, attachmentOf exact serial, labels), useAdbStatus, SessionAdbLine (+ Connect ADB)
-  features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog
+  features/pair/                      codeFormat.parseCodeInput, pairPort (ConnectOutcome mirror, outcomeMessage), PairDialog (draft held in App, unmount cancels a pending connect)
   features/devices/                  devicesPort (List/Forget/Nickname outcome mirrors, messages), DeviceList (request counter), DeviceDetail (inline forget confirm)
   features/session/                   transport (transportOf path>audit>unknown, transportLabel), StatusStrip, sessionPort (StopOutcome, stopMessage), SessionCard(clock), rejoinMachine (rejoinViewOf, nextWakeAt), RejoinBanner, EndedNotice (UK-03)
   state/                               clock (Clock, systemClock), sessionStore (HubMessage mirrors, pure reduce(state, msg, now)), useSessions(port, clock): subscribe, then resync()
@@ -129,6 +128,7 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 | --- | --- | --- |
 | DT-01 | [#3](https://github.com/SumukhaK/Setu-Desktop/pull/3) | JSON-RPC client core, full error table, framing, busy retry, FakeDaemon. One review round (connection leak on drop, fixed). |
 | DT-02 | [#6](https://github.com/SumukhaK/Setu-Desktop/pull/6) | Daemon supervisor, workspaces, attach record, ready line, fake daemon bin. One review round (`kill_on_drop` broke P17; token could go to a non-loopback record). |
+| UK-04 | [#35](https://github.com/SumukhaK/Setu-Desktop/pull/35) | Seven nits: rejected invokes caught (PairDialog, DeviceList, DeviceDetail), RejoinBanner re-arms on tick, hub `Unavailable` once per generation, build.rs finds `$PROFILE` by name, PairDialog draft lives in App and unmount cancels a pending connect, tray left click restores only, Quit retry. No review round. |
 | DT-09 | [#33](https://github.com/SumukhaK/Setu-Desktop/pull/33) | Tray (Show/Quit), close hides, restore resyncs, Quit confirm in UI then `end_all_sessions` + `Supervisor::stop()`. No review round; builder caught the prompt's `-32012` error (`-32012` = NotPaired, `-32020` = NoSession). |
 | UK-03 | [#31](https://github.com/SumukhaK/Setu-Desktop/pull/31) | Solo end-state notices (peer_closed + reason, expired, abnormal), Dismiss kept in App, manual Reconnect via `DevicesPort.connect`, notice hides once the device is live again. No review round. |
 | UK-02 | [#29](https://github.com/SumukhaK/Setu-Desktop/pull/29) | App shell: chrome, rail, Workspace and Devices pages, one stylesheet from the prototype tokens, dev-only CSP. No review round; reviewer checked the build under the production CSP header. |
@@ -143,8 +143,8 @@ docs/  JOURNEYS SCREENS TDD_TICKETS CODEBASE_MEMORY prompts/ previews/ walkthrou
 
 ## Open items
 
-- Active ticket: UK-04 · Robustness nits (prompt issued 2026-11-23): rejected invokes (PairDialog, DeviceList load, DeviceDetail save), RejoinBanner re-arm, hub `Unavailable` once per loss, build.rs profile dir by name, PairDialog draft in App, tray left click restores only, Quit retry after a rejected `app_quit`. Then DT-10.
-- 2026-11-22 audit (TDD_TICKETS §5a): UK-01 (#26), UK-02 (#29), UK-03 (#31) done; UK-04 is the last upkeep item. v1.1.0 has no shutdown RPC: an attached daemon survives Quit with no sessions (SDK ask §7 item 5). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
+- Active ticket: DT-10 · Android 11+ debugger pairing (prompt issued 2026-11-25). `log/redact.rs` (pure, hand-scanned: NNNN-NNNNNN, exact 6-digit runs, pairing_code/token JSON values), `commands/pair_adb.rs` (shares PendingConnect; never sends `adb_path`, daemon decodes params strictly), PairAdbDialog on the session card, behind `VITE_SETU_ADB_PAIR=1`. Then DT-11.
+- 2026-11-22 audit (TDD_TICKETS §5a): UK-01..UK-04 all done (#26, #29, #31, #35). v1.1.0 has no shutdown RPC: an attached daemon survives Quit with no sessions (SDK ask §7 item 5). The merged Rust core passed a live run against daemon v1.1.0; `session.stop` emits `path_down` just before `session_down`.
 - Design rebase merged (#8): the phone's session label is now shown as **Connected as (unverified)** (peerLabel may be the desktop label, corporate user or key fingerprint). The T−5 minute warning hook (`setuDesktopSessionDeadline`) has no v1.1.0 source: native tickets must never feed it a credential `expires_at`. The page allowlist excludes `auth.set_token` and `identity.public_key` (native only, DT-14).
 - Merged `feature/*` and `upkeep/*` branches aren't auto-deleted; turn on "Automatically delete head branches".
 - SDK v1.1.1 asks and backend items: TDD_TICKETS.md §7. DT-10 stays behind a flag until the device-lab gate there passes. v1.1.0 prints only `daemon_ready` on stdout; if a future daemon writes more, recheck the drain thread on SDK upgrades.
