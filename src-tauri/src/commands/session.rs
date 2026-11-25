@@ -64,9 +64,9 @@ pub struct PendingConnect {
 }
 
 /// Clear the slot on every exit path, including cancellation and errors.
-struct SlotGuard<'a> {
-    pending: &'a PendingConnect,
-    token: u64,
+pub(crate) struct SlotGuard<'a> {
+    pub(crate) pending: &'a PendingConnect,
+    pub(crate) token: u64,
 }
 
 impl Drop for SlotGuard<'_> {
@@ -82,7 +82,7 @@ impl Drop for SlotGuard<'_> {
     }
 }
 
-fn claim_slot(pending: &PendingConnect) -> Option<(oneshot::Receiver<()>, u64)> {
+pub(crate) fn claim_slot(pending: &PendingConnect) -> Option<(oneshot::Receiver<()>, u64)> {
     let token = pending.next_token.fetch_add(1, Ordering::Relaxed) + 1;
     let (cancel_tx, cancel_rx) = oneshot::channel();
     let mut slot = pending.slot.lock().unwrap_or_else(PoisonError::into_inner);

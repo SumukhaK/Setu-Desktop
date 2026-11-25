@@ -11,6 +11,7 @@ import type { AdbPort } from "./features/adb/adbStatus";
 import { useAdbStatus } from "./features/adb/useAdbStatus";
 import type { DevicesPort } from "./features/devices/devicesPort";
 import type { PairPort } from "./features/pair/pairPort";
+import type { PairAdbPort } from "./features/pair-adb/pairAdbPort";
 import type { SessionPort } from "./features/session/sessionPort";
 import { systemClock } from "./state/clock";
 import type { Clock } from "./state/clock";
@@ -26,6 +27,7 @@ export function App({
   port,
   hubPort,
   pairPort,
+  pairAdbPort,
   adbPort,
   sessionPort,
   clipboard,
@@ -36,6 +38,7 @@ export function App({
   port: DaemonPort;
   hubPort: SessionHubPort;
   pairPort?: PairPort;
+  pairAdbPort?: PairAdbPort;
   adbPort?: AdbPort;
   sessionPort?: SessionPort;
   clipboard?: { writeText(s: string): Promise<void> };
@@ -147,6 +150,7 @@ export function App({
           sessionPort={stopPort}
           clipboard={targetClipboard}
           pairPort={pairPort}
+          pairAdbPort={pairAdbPort}
           pairing={pairing}
           onPair={() => {
             setPairing(true);

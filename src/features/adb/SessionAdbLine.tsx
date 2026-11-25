@@ -8,10 +8,12 @@ export function SessionAdbLine({
   session,
   adb,
   port,
+  onPairDebugger,
 }: {
   session: LiveSession;
   adb: AdbSnapshot | null;
   port: AdbPort | null;
+  onPairDebugger?: () => void;
 }) {
   const [pending, setPending] = useState(false);
   const [outcome, setOutcome] = useState<AdbConnectOutcome | null>(null);
@@ -52,6 +54,11 @@ export function SessionAdbLine({
           }}
         >
           Connect ADB
+        </button>
+      )}
+      {onPairDebugger !== undefined && attachment !== "attached" && (
+        <button type="button" className="button secondary" onClick={onPairDebugger}>
+          Pair debugger
         </button>
       )}
       {message !== null && (

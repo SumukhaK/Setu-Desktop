@@ -1,7 +1,136 @@
-//! Redaction is the single native text choke point (AD-5, DT-10).
+//! Redaction is the single native text choke point (AD-5, DT-10). Hand-scanned
+//! so the core adds no regex or logging dependency.
 
+/// Mask ephemeral pairing codes, exact six-digit runs, and secret JSON values.
+/// Everything else is copied byte-for-byte.
 pub fn redact(input: &str) -> String {
-    input.to_owned()
+    let codes = mask_pairing_codes(input);
+    let digits = mask_six_digits(&codes);
+    mask_json_values(&digits)
+}
+
+fn ascii_digit(byte: u8) -> bool {
+    byte.is_ascii_digit()
+}
+
+fn mask_pairing_codes(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let code = index + 11 <= bytes.len()
+            && bytes[index + 4] == b'-'
+            && bytes[index..index + 4].iter().copied().all(ascii_digit)
+            && bytes[index + 5..index + 11]
+                .iter()
+                .copied()
+                .all(ascii_digit)
+            && (index == 0 || !ascii_digit(bytes[index - 1]))
+            && (index + 11 == bytes.len() || !ascii_digit(bytes[index + 11]));
+        if code {
+            out.push_str("****-******");
+            index += 11;
+            continue;
+        }
+        let ch = input[index..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
+fn mask_six_digits(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if !ascii_digit(bytes[index]) {
+            let ch = input[index..].chars().next().unwrap_or('\0');
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && ascii_digit(bytes[index]) {
+            index += 1;
+        }
+        if index - start == 6 {
+            out.push_str("******");
+        } else {
+            out.push_str(&input[start..index]);
+        }
+    }
+    out
+}
+
+const SECRET_KEYS: [&str; 3] = ["pairing_code", "token", "auth_token"];
+
+fn skip_space(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && matches!(bytes[index], b' ' | b'\t' | b'\r' | b'\n') {
+        index += 1;
+    }
+    index
+}
+
+fn string_end(bytes: &[u8], mut index: usize) -> Option<usize> {
+    // `index` points at the opening quote.
+    index += 1;
+    let mut escaped = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => {
+                escaped = !escaped;
+            }
+            b'"' if !escaped => return Some(index),
+            _ => {
+                escaped = false;
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn mask_json_values(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut cursor = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let mut replacement = None;
+        if bytes[index] == b'"' {
+            for key in SECRET_KEYS {
+                let pattern = format!("\"{key}\"");
+                if !input[index..].starts_with(&pattern) {
+                    continue;
+                }
+                let mut next = skip_space(bytes, index + pattern.len());
+                if bytes.get(next) != Some(&b':') {
+                    continue;
+                }
+                next = skip_space(bytes, next + 1);
+                if bytes.get(next) != Some(&b'"') {
+                    continue;
+                }
+                let Some(end) = string_end(bytes, next) else {
+                    continue;
+                };
+                replacement = Some((next, end + 1));
+                break;
+            }
+        }
+        if let Some((start, end)) = replacement {
+            out.push_str(&input[cursor..start]);
+            out.push_str("\"[redacted]\"");
+            cursor = end;
+            index = end;
+            continue;
+        }
+        let ch = input[index..].chars().next().unwrap_or('\0');
+        index += ch.len_utf8();
+    }
+    out.push_str(&input[cursor..]);
+    out
 }
 
 #[cfg(test)]
@@ -27,11 +156,11 @@ mod tests {
         );
         assert_eq!(
             redact(r#"{"token":"eyJhbGciOiJIUzI1NiJ9.payload.signature"}"#),
-            r#"{"token":"[redacted]}"#
+            r#"{"token":"[redacted]"}"#
         );
         assert_eq!(
             redact(r#"{"auth_token" : "short"}"#),
-            r#"{"auth_token" : "[redacted]}"#
+            r#"{"auth_token" : "[redacted]"}"#
         );
     }
 
