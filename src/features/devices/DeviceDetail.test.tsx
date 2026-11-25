@@ -174,4 +174,16 @@ describe("DeviceDetail", () => {
     });
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
+
+  it("a rejected save shows the service message", async () => {
+    const setNickname = vi.fn((): Promise<NicknameOutcome> => Promise.reject(new Error("ipc")));
+    const port = fakePort({ setNickname });
+    render(<DeviceDetail device={device} connected={false} port={port} onChanged={changed} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't save this nickname. Try again.",
+    );
+  });
 });

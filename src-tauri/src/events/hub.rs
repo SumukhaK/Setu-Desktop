@@ -41,6 +41,9 @@ struct Connection {
     list_rx: Option<mpsc::UnboundedReceiver<ListResult>>,
     list_tx: Option<mpsc::UnboundedSender<ListResult>>,
     retry_at: Option<Instant>,
+    /// Generation of the last `Unavailable` announcement, so one loss is
+    /// announced once instead of once per retry.
+    unavailable_sent: Option<u64>,
 }
 
 impl Connection {
@@ -52,6 +55,7 @@ impl Connection {
             list_rx: None,
             list_tx: None,
             retry_at: None,
+            unavailable_sent: None,
         }
     }
 
@@ -62,7 +66,7 @@ impl Connection {
     fn clear(&mut self, out: &mpsc::UnboundedSender<HubMessage>, announce: bool) {
         if announce {
             if let Some(generation) = self.generation.take() {
-                emit(out, HubMessage::Unavailable { generation });
+                self.announce_unavailable(out, generation);
             }
         } else {
             self.generation = None;
@@ -72,6 +76,15 @@ impl Connection {
         self.list_rx = None;
         self.list_tx = None;
         self.retry_at = None;
+    }
+
+    /// Emit `Unavailable { generation }` once per generation, until a fresh
+    /// snapshot for that generation arrives or a new generation begins.
+    fn announce_unavailable(&mut self, out: &mpsc::UnboundedSender<HubMessage>, generation: u64) {
+        if self.unavailable_sent != Some(generation) {
+            emit(out, HubMessage::Unavailable { generation });
+            self.unavailable_sent = Some(generation);
+        }
     }
 }
 
@@ -106,14 +119,14 @@ async fn connect(
     let (client, notifications) = match connect_authenticated(listen, state_dir).await {
         Ok(pair) => pair,
         Err(_) => {
-            emit(out, HubMessage::Unavailable { generation });
+            connection.announce_unavailable(out, generation);
             schedule_retry(connection);
             return;
         }
     };
     // Subscribe before listing: no event can fall between the two calls.
     if client.call("events.subscribe", None).await.is_err() {
-        emit(out, HubMessage::Unavailable { generation });
+        connection.announce_unavailable(out, generation);
         schedule_retry(connection);
         return;
     }
@@ -233,6 +246,13 @@ async fn run(
                     Some(Ok(sessions)) => {
                         let (messages, action) = gate.on_sessions(sessions);
                         for message in messages {
+                            // A fresh snapshot ends this generation's
+                            // outage; allow the next loss to announce.
+                            if let HubMessage::Snapshot { generation, .. } = &message {
+                                if Some(*generation) == connection.generation {
+                                    connection.unavailable_sent = None;
+                                }
+                            }
                             emit(&out, message);
                         }
                         if matches!(action, Some(Action::ListSessions)) {

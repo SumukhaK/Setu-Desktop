@@ -11,15 +11,24 @@ import type {
   NicknameOutcome,
 } from "./devicesPort";
 
-function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(reason?: unknown): void;
+} {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((done) => {
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((done, failed) => {
     resolve = done;
+    reject = failed;
   });
   return {
     promise,
     resolve: (value) => {
       resolve(value);
+    },
+    reject: (reason) => {
+      reject(reason);
     },
   };
 }
@@ -149,5 +158,50 @@ describe("DeviceList", () => {
     render(<DeviceList port={port} liveDeviceIds={[]} />);
     fireEvent.click(await screen.findByRole("button", { name: "pixel-7 · Presence unknown" }));
     expect(await screen.findByRole("heading", { name: "pixel-7" })).toBeInTheDocument();
+  });
+
+  it("a rejected list shows the load message and Refresh still works", async () => {
+    const list = vi
+      .fn<() => Promise<ListOutcome>>()
+      .mockRejectedValueOnce(new Error("ipc"))
+      .mockResolvedValueOnce(listed([row("pixel-7")]));
+    const port = fakePort(list);
+    render(<DeviceList port={port} liveDeviceIds={[]} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't load saved devices. Try again.",
+    );
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(
+      await screen.findByRole("button", { name: "pixel-7 · Presence unknown" }),
+    ).toBeInTheDocument();
+  });
+
+  it("a late rejection from an older request never shows", async () => {
+    const first = deferred<ListOutcome>();
+    const second = deferred<ListOutcome>();
+    const list = vi
+      .fn<() => Promise<ListOutcome>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const port = fakePort(list);
+    const { rerender } = render(<DeviceList port={port} liveDeviceIds={[]} />);
+
+    rerender(<DeviceList port={port} liveDeviceIds={["pixel-7"]} />);
+    await act(async () => {
+      second.resolve(listed([row("pixel-7")]));
+      await second.promise;
+    });
+    expect(
+      await screen.findByRole("button", { name: "pixel-7 · Presence unknown" }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      first.reject(new Error("ipc"));
+      await first.promise.catch(() => undefined);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

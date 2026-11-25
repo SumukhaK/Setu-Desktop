@@ -27,6 +27,8 @@ export function WorkspacePage({
   pairing,
   onPair,
   onPairingClose,
+  pairDraft,
+  onPairDraftChange,
   ended,
   onDismissEnded,
   reconnect,
@@ -43,6 +45,8 @@ export function WorkspacePage({
   pairing: boolean;
   onPair: () => void;
   onPairingClose: () => void;
+  pairDraft: string;
+  onPairDraftChange: (value: string) => void;
   ended: readonly EndedSession[];
   onDismissEnded: (sessionId: string) => void;
   reconnect?: (deviceId: string) => Promise<ConnectOutcome>;
@@ -93,7 +97,14 @@ export function WorkspacePage({
             <Icon name="plus" />
             Pair new device
           </button>
-          {pairing && <PairDialog port={pairPort} onClose={onPairingClose} />}
+          {pairing && (
+            <PairDialog
+              port={pairPort}
+              draft={pairDraft}
+              onDraftChange={onPairDraftChange}
+              onClose={onPairingClose}
+            />
+          )}
         </>
       )}
     </>

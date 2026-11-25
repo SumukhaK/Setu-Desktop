@@ -25,11 +25,22 @@ fn windows_test_support() -> Result<(), Box<dyn Error>> {
         let manifest_dir = PathBuf::from(
             std::env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR is set by Cargo")?,
         );
-        // target/<profile>/build/<package>/<hash>/out
+        // Walk up to the directory named after the profile (target/debug,
+        // target/release, ...), whatever depth the current layout uses.
+        let profile = std::env::var("PROFILE").map_err(|_| "PROFILE is set by Cargo")?;
+        let profile_os = std::ffi::OsString::from(profile.clone());
         let target_dir = out_dir
             .ancestors()
-            .nth(4)
-            .ok_or("the profile dir is four levels above OUT_DIR")?;
+            .find(|dir| {
+                dir.file_name()
+                    .is_some_and(|name| name == profile_os.as_os_str())
+            })
+            .ok_or_else(|| {
+                format!(
+                    "OUT_DIR {} has no `{profile}` profile ancestor",
+                    out_dir.display()
+                )
+            })?;
         let loader = target_dir.join("WebView2Loader.dll");
         if !loader.exists() {
             return Err(format!(

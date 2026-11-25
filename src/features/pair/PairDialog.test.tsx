@@ -1,8 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PairDialog } from "./PairDialog";
 import type { ConnectOutcome, PairPort } from "./pairPort";
+
+function Harness({ port, onClose }: { port: PairPort; onClose: () => void }) {
+  const [draft, setDraft] = useState("");
+  return <PairDialog port={port} draft={draft} onDraftChange={setDraft} onClose={onClose} />;
+}
 
 function fakePort(outcome: ConnectOutcome) {
   const connect = vi.fn(() => Promise.resolve(outcome));
@@ -11,7 +17,7 @@ function fakePort(outcome: ConnectOutcome) {
 }
 
 function submitCode(port: PairPort) {
-  const view = render(<PairDialog port={port} onClose={() => undefined} />);
+  const view = render(<Harness port={port} onClose={() => undefined} />);
   const input = screen.getByLabelText<HTMLInputElement>("Pairing code");
   fireEvent.change(input, { target: { value: "0012345678" } });
   return { input, unmount: view.unmount };
@@ -39,7 +45,7 @@ describe("PairDialog", () => {
       device_id: "p",
       adb_addr: "a",
     });
-    render(<PairDialog port={port} onClose={() => undefined} />);
+    render(<Harness port={port} onClose={() => undefined} />);
     const input = screen.getByLabelText<HTMLInputElement>("Pairing code");
     fireEvent.change(input, { target: { value: "0012-34567a" } });
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
@@ -63,7 +69,7 @@ describe("PairDialog", () => {
     });
     const port: PairPort = { connect, cancel };
     const onClose = vi.fn();
-    render(<PairDialog port={port} onClose={onClose} />);
+    render(<Harness port={port} onClose={onClose} />);
     fireEvent.change(screen.getByLabelText<HTMLInputElement>("Pairing code"), {
       target: { value: "0012-345678" },
     });
@@ -111,5 +117,22 @@ describe("PairDialog", () => {
     await screen.findByRole("alert");
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("a rejected connect shows the service message and re-enables Connect", async () => {
+    const connect = vi.fn(() => Promise.reject(new Error("ipc")));
+    const port: PairPort = { connect, cancel: vi.fn(() => Promise.resolve(true)) };
+    render(<Harness port={port} onClose={() => undefined} />);
+    fireEvent.change(screen.getByLabelText<HTMLInputElement>("Pairing code"), {
+      target: { value: "0012345678" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't reach the Setu service. Try again.",
+    );
+    expect(screen.queryByText("Connecting…")).toBeNull();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled();
   });
 });
