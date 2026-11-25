@@ -1,178 +1,333 @@
-# Builder prompt · DT-11 · Diagnostics
+# Builder prompt · DT-12 · Settings: computer name, relay, pin, proxy
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
 1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-14).
-2. `docs/TDD_TICKETS.md` §5 "DT-11" and §3 row P16.
-3. `docs/JOURNEYS.md` J6 "Diagnostics" paragraph and row P16; `docs/SCREENS.md` row D09.
-4. Setu-SDK v1.1.0 `API_SPEC.md` §1.7 (`DoctorReport`) and the `doctor` row in §2: https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
+2. `docs/TDD_TICKETS.md` §5 "DT-12" (including its 2026-11-25 note) and §3 row P16.
+3. `docs/JOURNEYS.md` J6 "Diagnostics" paragraph (the Settings sentences) and row P16; `docs/SCREENS.md` row D10.
+4. Setu-SDK v1.1.0 `API_SPEC.md` §2, the daemon start flags: https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
 5. The prototype (visual reference only, never app code):
-   - `prototype.js`: `checks` (the label list) and `doctorPage()`
-   - `styles.css`: `.status`, `.status > span`, `.status.good`, `.status.warning`, `.status.critical`, `.standard-card*`, `.hint`, `.muted`
+   - `prototype.js`: `settingsPage()`, the `case 'settings'` submit handler, `parseUrl()`, `validRelay()`, and the `settings` icon path in the icon table at the top
+   - `styles.css`: `form > label`, `input:not([type="checkbox"])`, `input::placeholder`, `input[aria-invalid="true"]`, `.error-message`, `.button-row`, `.standard-card .button-row`
 6. Existing code you'll use or extend:
-   - `src-tauri/src/log/redact.rs` (DT-10), `src-tauri/src/app/mod.rs`
-   - `src-tauri/tests/support/fake_daemon.rs`
-   - `src/app/Shell.tsx` (`Page`, `navItems`, `items`), `src/App.tsx`, `src/platform/tauri.ts`, `src/main.tsx`, `src/styles/app.css`
+   - `src-tauri/src/daemon/config.rs` (`DaemonConfig`, `to_args`), `src-tauri/src/daemon/supervisor.rs`
+   - `src-tauri/src/store/nicknames.rs` (the atomic-JSON pattern to copy)
+   - `src-tauri/src/commands/quit.rs` (`end_all_sessions`)
+   - `src-tauri/src/app/mod.rs` (`setup`, `computer_name()`), `src-tauri/src/app/status.rs` (`resolve_relay`)
+   - `src-tauri/tests/daemon_supervisor.rs` and `tests/support/fake_setu_daemon.rs` (`FAKE_DAEMON_ARGS_FILE`)
+   - `src/app/Shell.tsx`, `src/app/Icon.tsx`, `src/app/QuitConfirm.tsx` (the dialog pattern), `src/App.tsx`, `src/platform/tauri.ts`, `src/main.tsx`, `src/styles/app.css`
 
-**Facts this ticket relies on (read by the reviewer in the v1.1.0 source, `core/pkg/genadb/doctor.go`):**
-- `doctor` takes no params and returns `{version, platform, ok, checks: [{name, status, detail, hint?}]}`. `hint` is omitted when empty. `ok` is false when any check is `fail`.
-- `status` is one of `ok`, `warn`, `fail` or `skip` today. Treat any other string as unknown, not as an error.
-- Checks today, in order:
-  1. `adb`
-  2. `state`
-  3. `paired_devices`
-  4. `proxy_env`
-  5. either `relay` (skip, when no relay is configured) or `relay_dns` then `relay_reach`
-  6. `audit_log`
-  
-  More may come later, and the UI must render any unknown name.
-- The network checks use an 8 s timeout each, so one run can take about 20 s. `RpcClient::call` has no timeout of its own.
-- The SDK already strips proxy credentials in `proxy_env`. Other details (DNS and dial errors, file paths, device ids) are free text. Rust redacts every string before it crosses the bridge.
+**Facts this ticket relies on (read by the reviewer in the v1.1.0 source, `core/internal/daemon/cmd.go` and `core/internal/engine/transport.go`):**
+- The daemon takes `--label`, `--relay`, `--relay-pin` and `--proxy` at start only. There is no RPC to change them, so applying new values means restarting the daemon.
+- `--relay` accepts `host:port`, `ws://…` or `wss://…`.
+- `--relay-pin` is compared, after removing `:` and lower-casing, with the hex SHA-256 of the relay's leaf certificate DER. The daemon does not check its length; a wrong pin only shows up as a failed TLS connection. It only matters for `wss://`.
+- `--proxy` is parsed with Go's `url.Parse` and used as an HTTP CONNECT proxy for ws/wss. Empty means "use `HTTPS_PROXY`/`HTTP_PROXY`".
+- v1.1.0 has no shutdown RPC. The app can only restart a daemon **it spawned**. An attached daemon (`DaemonState::Ready { attached: true }`) can't be restarted from here.
 
 ## 1. Goal
 
-A **Diagnostics** page in the rail runs the daemon's `doctor` and lists every check with its label, a status pill, the detail and the fix hint (P16).
-- Unknown check names and statuses render generically.
-- **Run again** re-runs the checks, and **Copy report** copies a plain-text report.
-- No JWT, pairing code or proxy credential can appear on the page or in the copied text, because Rust redacts first.
+A **Settings** page in the rail (D10, P16) edits four daemon start values: **Computer name**, **Custom relay URL**, **Relay certificate pin** and **Corporate HTTP proxy**.
+- Rust validates and saves them in a desktop-only JSON file.
+- **Apply** restarts only the Solo daemon this app spawned, after a confirmation that names the live sessions it will end.
+- It never silently switches transport. If the new values fail, the daemon shows Restarting or Failed with those values, and the app never falls back to the old ones.
 
 Out of scope:
-- The Settings page and its "Connection settings" link (DT-12).
-- Audit log (DT-13).
-- File export.
-- Running checks on a schedule.
+- `--relay-ca` (needs a file picker).
+- Proxy user names or passwords. The proxy field rejects them, as the prototype does, so no credential is ever stored or sent back to the page.
+- Corporate workspaces (DT-14+).
+- The audit log (DT-13).
+- The UK-05 nits.
+- Any change to Diagnostics.
 
 ## 2. Files (create or change only these)
 
 ```
-src-tauri/src/log/redact.rs                 + two rules (§3) and their unit tests
-src-tauri/src/commands/diagnostics.rs       DoctorOutcome, run_doctor()
-src-tauri/src/commands/mod.rs               pub mod diagnostics; re-exports
-src-tauri/tests/diagnostics_commands.rs     FakeDaemon tests (§4)
-src-tauri/src/app/mod.rs                    + command diagnostics_run
-src/features/diagnostics/checks.ts          labels, statusView(), reportText()
-src/features/diagnostics/checks.test.ts
-src/features/diagnostics/diagnosticsPort.ts DoctorOutcome mirror, DiagnosticsPort
-src/features/diagnostics/DiagnosticsPage.tsx (+ .test.tsx)
-src/app/Shell.tsx (+ Shell.test.tsx)        Page += "diagnostics" (icon "terminal", label "Diagnostics")
-src/App.tsx, src/App.test.tsx               optional diagnosticsPort, + rail item and page
-src/platform/tauri.ts                       + tauriDiagnosticsPort
-src/main.tsx                                pass diagnosticsPort
-src/styles/app.css                          port .status, .status > span, .status.good/.warning/.critical, .standard-card (+ > .list, > .list > li), .hint, .muted
+src-tauri/src/store/settings.rs            ConnectionSettings, SettingsStore (atomic JSON)
+src-tauri/src/store/mod.rs                 pub mod settings;
+src-tauri/src/commands/settings.rs         SettingsInput, Invalid, validate(), build_config(), SettingsView, ApplyOutcome, apply_settings()
+src-tauri/src/commands/mod.rs              pub mod settings; re-exports
+src-tauri/src/daemon/supervisor.rs         + Supervisor::restart_with(config) -> RestartOutcome
+src-tauri/src/daemon/mod.rs                re-export RestartOutcome
+src-tauri/tests/settings_commands.rs       validation, store, build_config, apply (§4)
+src-tauri/tests/daemon_supervisor.rs       + restart_with tests (§4)
+src-tauri/src/app/mod.rs                   startup reads settings; + commands settings_get, settings_apply
+src/features/settings/settingsPort.ts      TS mirrors, SettingsPort
+src/features/settings/settingsText.ts      fieldError() messages, outcomeText() (+ .test.ts)
+src/features/settings/SettingsPage.tsx     form, confirm dialog, outcomes (+ .test.tsx)
+src/app/Icon.tsx                           + "settings" icon (prototype path)
+src/app/Shell.tsx (+ Shell.test.tsx)       Page += "settings" (icon "settings", label "Settings")
+src/App.tsx, src/App.test.tsx              optional settingsPort, + rail item and page
+src/platform/tauri.ts                      + tauriSettingsPort
+src/main.tsx                               pass settingsPort
+src/styles/app.css                         port the rules listed in §0 step 5 that app.css doesn't have yet
 ```
 
-Don't touch `daemon/`, `rpc/`, `events/`, `adb/`, `store/`, the other `commands/*`, `capabilities/`, `tauri.conf.json`, `src/state/`, the other feature folders, `docs/`, `README.md`, the prototype or CI. Add no crate and no npm package.
+Don't touch:
+- `rpc/`, `events/`, `adb/` or `log/`
+- `daemon/config.rs`: its argv order is already right
+- `daemon/workspace.rs`, `ready_line.rs`
+- `store/nicknames.rs`, or the other `commands/*`
+- `capabilities/`, `tauri.conf.json`
+- `src/state/`, or the other feature folders
+- `docs/`, `README.md`, the prototype, or CI
+
+Add no crate and no npm package.
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**Redaction (`log/redact.rs`).** Keep the three DT-10 rules. Append two more, applied after them:
-4. **URL userinfo:** in any `scheme://user[:pass]@host`, replace everything between `://` and the last `@` that comes before the next `/`, whitespace or end with `[redacted]`. The result is `scheme://[redacted]@host`.
-5. **JWT-shaped tokens:** `eyJ` followed by base64url characters, a `.`, base64url characters, a `.`, and optional base64url characters, becomes `[redacted-jwt]`. The token must not touch other base64url characters on either side.
+**Stored settings (`store/settings.rs`).**
 
-Both rules are hand-scanned. Everything else passes through byte-for-byte.
+```rust
+#[derive(Clone, PartialEq, Default)]          // no Debug (AD-5 habit for config types)
+pub struct ConnectionSettings {
+    pub label: Option<String>,
+    pub relay: Option<String>,
+    pub relay_pin: Option<String>,   // normalized: 64 lower-case hex, no colons
+    pub proxy: Option<String>,
+}
+pub struct SettingsStore { /* path, lock */ }
+impl SettingsStore {
+    pub fn new(state_dir: &Path) -> Self;               // <state_dir>/desktop-settings.json
+    pub fn load(&self) -> ConnectionSettings;            // missing, malformed, wrong version, or any value that fails validate() → Default
+    pub fn save(&self, settings: &ConnectionSettings) -> io::Result<()>;  // atomic: temp file + rename, like NicknameStore
+}
+```
 
-**Command (`commands/diagnostics.rs`, no Tauri).**
+File shape: `{"version":1,"label":…,"relay":…,"relay_pin":…,"proxy":…}`, where an absent value is `null`.
+
+**Validation (`commands/settings.rs`).** It's the only validator. The page shows Rust's verdict and doesn't re-implement the rules.
+
+```rust
+#[derive(Deserialize)]
+pub struct SettingsInput { pub label: String, pub relay: String, pub relay_pin: String, pub proxy: String }
+
+#[derive(Clone, Copy, Serialize, PartialEq, Debug)] #[serde(rename_all = "snake_case")]
+pub enum SettingsField { Label, Relay, RelayPin, Proxy }
+#[derive(Clone, Copy, Serialize, PartialEq, Debug)] #[serde(rename_all = "snake_case")]
+pub enum Problem { Format, TooLong, NeedsWss, HasCredentials }
+#[derive(Clone, Copy, Serialize, PartialEq, Debug)]
+pub struct Invalid { pub field: SettingsField, pub problem: Problem }
+
+pub fn validate(input: &SettingsInput, fallback_relay: Option<&str>) -> Result<ConnectionSettings, Invalid>;
+```
+
+Trim every field first. An empty field becomes `None`. Then check the fields in this order, and return the first failure:
+
+1. **label:**
+   - more than 64 `char`s → `TooLong`
+   - any `char::is_control` → `Format`
+2. **relay:**
+   - any whitespace inside → `Format`
+   - If it contains `://`:
+     - the scheme, compared without case, must be `ws` or `wss`, else `Format`
+     - the authority is everything up to the first `/`, `?` or `#`
+     - an authority containing `@` → `HasCredentials`
+     - an empty authority → `Format`
+   - Otherwise it must be `host:port`, else `Format`:
+     - host is `[A-Za-z0-9.-]+`, or `[` + `[0-9A-Fa-f:.]+` + `]`
+     - port is 1 to 65535, digits only
+3. **relay_pin:**
+   - remove every `:`; the rest must be exactly 64 ASCII hex digits, else `Format`
+   - store it lower-cased, without colons
+   - Then, if a pin is set and the **effective relay** (the new relay, else `fallback_relay`) doesn't start with `wss://` (compared without case) → `NeedsWss`
+4. **proxy:**
+   - must start with `http://` or `https://` (compared without case), else `Format`
+   - the authority is everything up to the first `/`
+   - an authority containing `@` → `HasCredentials`
+   - otherwise it must be `host:port` as above, else `Format`
+   - anything after the authority other than nothing or a single `/` → `Format`
+
+All four rules are hand-scanned. Don't add a regex or URL crate.
+
+**Effective config.**
+
+```rust
+pub fn build_config(daemon_path: PathBuf, fallback_relay: Option<String>, settings: &ConnectionSettings, computer_name: Option<String>) -> Option<DaemonConfig>;
+```
+
+- `relay` = `settings.relay`, else `fallback_relay`. If both are `None`, return `None`.
+- `label` = `settings.label`, else `computer_name`.
+- `relay_pin` and `proxy` come from `settings`. `adb_path` and `corporate` are `None`.
+
+**Page view.**
 
 ```rust
 #[derive(Clone, Serialize, PartialEq, Debug)]
-pub struct DoctorCheck { pub name: String, pub status: String, pub detail: String, pub hint: Option<String> }
-
-#[derive(Clone, Serialize, PartialEq, Debug)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum DoctorOutcome {
-    Report { version: String, platform: String, ok: bool, checks: Vec<DoctorCheck> },
-    NotReady,
-    TimedOut,
-    Failed { code: Option<i64> },
-}
-
-pub async fn run_doctor(client: Option<RpcClient>, limit: Duration) -> DoctorOutcome;
+pub struct SettingsView { pub label: String, pub relay: String, pub relay_pin: String, pub proxy: String,
+                          pub default_label: Option<String>, pub default_relay: Option<String> }
+pub fn settings_view(settings: &ConnectionSettings, fallback_relay: Option<&str>, computer_name: Option<&str>) -> SettingsView;
 ```
 
-- Call `doctor` with no params, wrapped in `tokio::time::timeout(limit, …)`. The shell passes 30 s.
-- Parse it leniently:
-  - a missing `hint` or an empty one becomes `None`
-  - a missing `checks` becomes `[]`
-  - a missing `version` or `platform` becomes `""`
-  - a non-object result becomes `Failed { code: None }`
-- Pass **every** string (name, status, detail, hint, version, platform) through `redact()` before building the outcome.
-- `ok` comes from the daemon. Don't recompute it.
-- Shell: `#[tauri::command] async fn diagnostics_run(..) -> Result<DoctorOutcome, String>` using `ready_client`.
+- `None` values show as `""`.
+- `default_relay` is `fallback_relay` passed through `redact()`.
+- `default_label` is the computer name.
+
+**Supervisor.**
+
+```rust
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum RestartOutcome { Restarting, NotOwned }
+impl Supervisor { pub async fn restart_with(&self, config: DaemonConfig) -> RestartOutcome; }
+```
+
+- If the current state is `Ready { attached: true, .. }`, return `NotOwned` and change nothing.
+- If the run task is still alive:
+  - Tell it, through the existing control channel (turn `mpsc::Sender<()>` into a small enum, `Stop | Restart(Box<DaemonConfig>)`), to kill and reap the child it spawned and remove the attach record it owns.
+  - Then publish `Starting` and start again with the new config, with the failure count reset.
+  - A restart that arrives during the backoff sleep applies at once.
+- If the run task has ended (`Failed` or `Stopped`), start a fresh run task on the **same** watch sender, so existing subscribers and the event hub keep working.
+- Return `Restarting` once the request has been handed over. Don't wait for `Ready`.
+- `generation` never repeats within one `Supervisor`. Keep the next generation in the shared struct, not as a local in `run`.
+- `stop()` and the P17 rules are unchanged: a dropped handle never kills the daemon.
+
+**Apply.**
+
+```rust
+#[derive(Clone, Serialize, PartialEq, Debug)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ApplyOutcome { Applied, SavedForNextStart, SavedNotOwned, Invalid { field: SettingsField, problem: Problem }, SaveFailed }
+
+pub async fn apply_settings(store: &SettingsStore, supervisor: Option<&Supervisor>, input: &SettingsInput,
+                            fallback_relay: Option<String>, daemon_path: PathBuf, computer_name: Option<String>) -> ApplyOutcome;
+```
+
+1. `validate` → on error, `Invalid`. Nothing is saved.
+2. `store.save` → on error, `SaveFailed`.
+3. If there's no supervisor, or `build_config` returns `None` → `SavedForNextStart`.
+4. If the supervisor is `Ready { attached: true }` → `SavedNotOwned`. No session is ended.
+5. Otherwise call `end_all_sessions` with the current ready client (or `None`), under a 5 s timeout, ignoring its outcome. Then call `restart_with(config)`:
+   - `Restarting` → `Applied`
+   - `NotOwned` → `SavedNotOwned`
+
+**Shell (`app/mod.rs`).**
+
+- At startup, load the `SettingsStore` for the Solo state dir. Then build the supervisor config with `build_config(daemon_path, resolve_relay(env, compile-time), &settings, computer_name())`.
+  - `None` → `NotConfigured`, no supervisor, as today.
+- Keep `daemon_path`, `fallback_relay` and the store in `AppState`.
+- Add `#[tauri::command] fn settings_get(..) -> SettingsView`.
+- Add `#[tauri::command] async fn settings_apply(input: SettingsInput, ..) -> Result<ApplyOutcome, String>`.
+- No other shell change.
 
 **UI.**
-- `checks.ts`:
-  - `checkLabel(name)` returns:
-    - `adb` → "Android Debug Bridge"
-    - `state` → "State directory"
-    - `paired_devices` → "Paired devices"
-    - `proxy_env` → "Proxy environment"
-    - `relay` → "Relay"
-    - `relay_dns` → "Relay DNS"
-    - `relay_reach` → "Relay reachability"
-    - `audit_log` → "Audit log"
-    - anything else → the raw name
-  - `statusView(status)` returns `{ label, tone }`:
-    - `ok` → `{ "OK", "good" }`
-    - `warn` → `{ "Warning", "warning" }`
-    - `fail` → `{ "Failed", "critical" }`
-    - `skip` → `{ "Skipped", "neutral" }`
-    - anything else → `{ status.toUpperCase() || "UNKNOWN", "neutral" }`
-  - `reportText(report)`: a plain-text report, built only from the already-redacted report fields:
-    - first line: `Setu doctor · {version} · {platform} · {ok ? "all checks passed" : "some checks failed"}`
-    - then one line per check: `{label} ({name}): {statusLabel} · {detail}`
-    - plus `  Fix: {hint}` when there's a hint
-- `DiagnosticsPage` (props `{ port: DiagnosticsPort; clipboard: { writeText(s: string): Promise<void> } }`):
-  - Heading: `<header className="page-heading">` with `<h1 tabIndex={-1}>Diagnostics</h1>` and subtitle "setu doctor · This computer".
-  - Run `port.run()` once on mount. While pending, show `<p className="notice" role="status">Checking local diagnostics…</p>`.
-  - **Report:** a `<section className="card standard-card">` holding:
-    - `<h2>Doctor checks</h2>`
-    - a summary line: "All checks passed", or "Some checks failed" when `!ok`
-    - `<p className="hint">{version} · {platform}</p>`
-    - `<ul className="list">` with one `<li>` per check, containing `<strong>{label}</strong> <code>{name}</code>`, `<p>{detail}</p>` and, when there's a hint and the status isn't `ok`, `<p className="muted">Fix: {hint}</p>`, plus `<span className={"status " + tone}><span aria-hidden="true"></span>{label}</span>`
-    - buttons **Run again** (`button secondary`, disabled while pending) and **Copy report** (`button quiet`), which writes `reportText` to the clipboard and then shows "Report copied." in a `role="status"` line
-  - **Errors:**
-    - `not_ready` → "The Setu service isn't ready yet. Try again in a moment."
-    - `timed_out` → "Diagnostics took too long. Try again."
-    - `failed` → "Couldn't run diagnostics (error N). Try again.", or the same without the code
-    - a rejection → "Couldn't reach the Setu service. Try again."
-    
-    Each shows in `<p className="notice warning" role="alert">`, with **Run again** still available.
-  - A late result after unmount is ignored.
-- `Shell`: `Page` gains `"diagnostics"`, with `navItems.diagnostics = { label: "Diagnostics", icon: "terminal" }`.
-- `App`: optional `diagnosticsPort`. Add `"diagnostics"` to `items` after Devices when the port is given, and render `DiagnosticsPage` for that page, using the same clipboard App already has. `main.tsx` passes `tauriDiagnosticsPort`.
+
+- `settingsPort.ts`:
+  - Mirror `SettingsView` (snake_case fields), `SettingsInput` `{ label, relay, relay_pin, proxy }` and `ApplyOutcome`, with `field`/`problem` as string unions.
+  - `SettingsPort { get(): Promise<SettingsView>; apply(input: SettingsInput): Promise<ApplyOutcome> }`.
+  - `tauriSettingsPort.apply` calls `invoke("settings_apply", { input })`.
+- `settingsText.ts`:
+  - `fieldError(field, problem)` returns:
+    - label + too_long → "Use 64 characters or fewer."
+    - label + format → "Remove control characters from the name."
+    - relay + format → "Enter a wss:// or ws:// relay URL, or a TCP host:port."
+    - relay + has_credentials → "Remove the user name and password from the relay URL."
+    - relay_pin + format → "Enter 64 hexadecimal digits, with optional colons."
+    - relay_pin + needs_wss → "A certificate pin needs a wss:// relay."
+    - proxy + format → "Enter an HTTP proxy URL like http://proxy.example.test:8080."
+    - proxy + has_credentials → "Enter the proxy without a user name or password."
+    - any other pair → "Check this value."
+  - `outcomeText(outcome)` returns:
+    - applied → "Settings applied. The Setu service is restarting."
+    - saved_for_next_start → "Settings saved. They apply the next time Setu starts."
+    - saved_not_owned → "Settings saved. Setu is using a service it didn't start, so quit Setu and open it again to apply them."
+    - save_failed → "Couldn't save settings. Try again."
+- `SettingsPage` (props `{ port: SettingsPort; liveDeviceIds: string[] }`):
+  - **Heading:** `<header className="page-heading">` with `<h1 tabIndex={-1}>Settings</h1>` and the subtitle "Local service startup configuration".
+  - **Loading:** on mount, `port.get()` fills the form. While loading, show `<p className="notice" role="status">Loading settings…</p>`. If it's rejected, show `<p className="notice warning" role="alert">Couldn't reach the Setu service. Try again.</p>` with a **Try again** button.
+  - **Form:** one `<section className="card standard-card">` with `<h2>Relay and proxy</h2>` and a `<form noValidate>` holding four labelled inputs. Use the prototype's ids, labels, hints, `maxLength={64}` on the name, and `spellCheck={false}` on the pin.
+    - Placeholders:
+      - name: `default_label ?? ""`
+      - relay: `default_relay ?? "wss://relay.example.test"`
+      - proxy: `"http://proxy.example.test:8080"`
+    - Hint changes from the prototype:
+      - The relay hint gets " Leave empty to use the built-in relay." when `default_relay` is set.
+      - The proxy hint reads "HTTP CONNECT proxy for ws and wss relays. Leave empty to use HTTPS_PROXY. User names and passwords aren't supported."
+  - **Apply** (`button primary`, label "Apply and restart"):
+    - If `liveDeviceIds` is empty, call `port.apply` right away.
+    - Otherwise, open an `alertdialog` in the `QuitConfirm` pattern (focus on Cancel, Escape cancels):
+      - title "Restart the Setu service?"
+      - body "{N} live session(s) will end:" followed by a `<ul>` of the device ids
+      - buttons **Restart and apply** (`button primary danger`) and **Cancel**
+  - **While applying:** the button is disabled and reads "Applying…".
+  - **Outcomes:**
+    - `invalid` → `aria-invalid="true"` on that field only. Show its `fieldError` in `<p id="setting-error" className="error-message" role="alert">`, and point that input's `aria-describedby` at it. Then move focus to that input.
+    - Any other outcome → its `outcomeText` in `<p role="status">` (`save_failed` goes in a `role="alert"` warning notice instead). Clear any field error.
+    - A rejected `apply` → "Couldn't reach the Setu service. Try again." as an alert.
+  - **Late results:** a result that arrives after unmount is ignored (the DiagnosticsPage `sequence` pattern).
+- `Icon`: add `settings` with the prototype's path.
+- `Shell`: `Page` gains `"settings"`, with `navItems.settings = { label: "Settings", icon: "settings" }`.
+- `App`:
+  - optional `settingsPort`
+  - add `"settings"` to `items` after Diagnostics when the port is given
+  - render `SettingsPage` with `liveDeviceIds={live.map((s) => s.deviceId)}`
+  - `main.tsx` passes `tauriSettingsPort`
 - CSS: port the listed prototype rules verbatim, apart from formatting. No inline styles.
 
 ## 4. TDD: write these tests first, see them fail, then implement
 
-- **`redact.rs`:**
-  - a proxy URL whose userinfo is a made-up user and password, on host `proxy.corp:3128` → `http://[redacted]@proxy.corp:3128`
-  - In tests, build any user-and-password URL from parts (`["http://", "alice", ":", "pw", "@proxy.corp:3128"].join("")` in TS, `format!("http://{}:{}@proxy.corp:3128", "alice", "pw")` in Rust) so secret scanners on the PR stay quiet.
-  - `wss://relay.example.com/x` is untouched
-  - `user@example.com` (no `://`) is untouched
-  - a 3-part `eyJhbGciOi…` token inside text → `[redacted-jwt]`
-  - `eyJ` alone is untouched
-  - all DT-10 cases still pass
-- **`tests/diagnostics_commands.rs`** (FakeDaemon, every wait under `timeout`):
-  - **A real-shaped report:** a request with method `doctor` and no params; the checks are kept in order; `hint` is absent for an empty hint.
-  - **A detail containing a proxy URL with made-up userinfo (built from parts, as above), a `1234-567890` code and an `eyJa.eyJb.sig` token:** the outcome holds none of the secrets and does hold `[redacted]`.
-  - **An unknown check** `{name:"future_check", status:"maybe", detail:"x"}` passes through unchanged.
-  - **Missing `checks`** → an empty list.
-  - **A non-object result** → `Failed{None}`.
-  - **An error `-32603`** → `Failed{Some(-32603)}`.
-  - **A `None` client** → `NotReady`.
-  - **A daemon that never replies, with `limit` 200 ms** → `TimedOut`.
-- **`checks.test.ts`:** each known label, the fallback for an unknown name, every `statusView` branch including an unknown status and an empty one, and the exact `reportText` lines, with and without a hint.
-- **`DiagnosticsPage.test.tsx`:**
-  - pending → the report renders
-  - a `fail` check shows its detail and "Fix: …"; an `ok` check hides its hint
-  - a future check and status render generically
-  - **Run again** calls `run` a second time
-  - **Copy report** writes exactly `reportText(...)`
-  - each error branch shows its message
-  - a late resolve after unmount doesn't throw or update
-- **`Shell.test.tsx` / `App.test.tsx`:** the Diagnostics rail item appears only with a `diagnosticsPort`; clicking it focuses the "Diagnostics" `h1` and calls `run` once.
+In Rust tests, build any URL with a user and password from parts (`format!("http://{}:{}@proxy.corp:3128", "alice", "pw")`). In TS, use `["http://", "alice", ":", "pw", "@proxy.corp:3128"].join("")`. That keeps secret scanners on the PR quiet.
+
+- **`tests/settings_commands.rs`:**
+  - **validate, as a table:**
+    - all empty → all `None`
+    - name of 64 chars OK, 65 → `TooLong`; a `\u{7}` → `Format`
+    - relay values accepted:
+      - `wss://relay.example.test`
+      - `WS://10.0.0.5:7000/x`
+      - `relay.example.test:443`
+      - `[::1]:7000`
+    - relay values rejected:
+      - `ftp://x` → `Format`
+      - `wss://` → `Format`
+      - `relay:0` → `Format`
+      - `relay:65536` → `Format`
+      - `relay` → `Format`
+      - `wss://a b` → `Format`
+      - a credentialed `wss://` URL → `HasCredentials`
+    - pins:
+      - 64 hex digits with and without colons are both stored as the same lower-case value
+      - 63 digits → `Format`
+      - a `g` → `Format`
+      - a valid pin with relay `ws://…` → `NeedsWss`
+      - a valid pin with an empty relay and fallback `wss://…` → OK
+      - a valid pin with an empty relay and fallback `relay:7000` → `NeedsWss`
+    - proxies:
+      - `http://proxy.example.test:8080` and `https://p:3128/` are OK
+      - `socks5://p:1` → `Format`
+      - `http://p` (no port) → `Format`
+      - `http://p:8080/path` → `Format`
+      - a credentialed proxy → `HasCredentials`
+    - with two bad fields, the first in rule order is reported
+  - **build_config:**
+    - the settings relay overrides the fallback
+    - no relay anywhere → `None`
+    - an empty label falls back to the computer name
+    - `to_args` of the result has `--relay-pin <normalized>` and `--proxy <value>`
+  - **SettingsStore:**
+    - save then load round-trips
+    - a missing file, malformed JSON, `version: 2`, or a stored proxy with credentials each load as `Default`
+    - no `.tmp` file is left behind
+  - **apply_settings:**
+    - `Invalid` saves nothing (the file doesn't exist)
+    - no supervisor → `SavedForNextStart`, and the file is written
+    - with a supervisor running `fake-setu-daemon` → `Applied`; the next `Ready` has a higher generation and a new pid, and the second argv line holds the new `--label` and `--relay-pin`
+    - an attached supervisor → `SavedNotOwned`; the attached daemon's pid is still alive, and its generation is unchanged
+- **`tests/daemon_supervisor.rs`:**
+  - `restart_with` on a spawned daemon kills the old pid, and the record holds the new pid
+  - a supervisor whose first config points at a missing daemon path reaches `Failed`; then `restart_with` a valid config reaches `Ready` on the same receiver
+  - generation keeps increasing across both
+  - every wait is under `timeout`
+- **`settingsText.test.ts`:** every `fieldError` pair, the fallback, and every `outcomeText` branch.
+- **`SettingsPage.test.tsx`:**
+  - loading → the form is filled from `get()`, and the placeholders use the defaults
+  - with no live sessions, Apply calls `apply` once with the trimmed-as-typed values (Rust trims; the page sends what's typed)
+  - with two live sessions, the dialog lists both ids; Cancel calls nothing; **Restart and apply** calls `apply` once
+  - `invalid` marks only that field, focuses it, and shows its message
+  - each outcome shows its text
+  - a rejected `get`, then **Try again**, loads the form
+  - a late result after unmount doesn't throw or update
+- **`Shell.test.tsx` / `App.test.tsx`:** the Settings rail item appears only with a `settingsPort`, after Diagnostics. Clicking it focuses the "Settings" `h1` and calls `get` once.
 
 ## 5. Gates (all must pass before you push)
 
@@ -191,26 +346,50 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-All three CI jobs (`gates-linux`, `gates-windows`, `e2e-linux`) must be green on the PR head. Use no `#[allow(...)]`, no `unwrap()` outside tests, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no non-null `!`, and no inline styles.
+All three CI jobs (`gates-linux`, `gates-windows`, `e2e-linux`) must be green on the PR head.
 
-**Manual check** (name the OS): run `npm run tauri dev` with a real daemon and open Diagnostics. Attach a screenshot of the page and paste the copied report. Set `HTTPS_PROXY=http://user:pass@127.0.0.1:9` before the run, and show that neither the page nor the copied text contains `user:pass`.
+Don't use any of these:
+- `#[allow(...)]`
+- `unwrap()` outside tests
+- `eslint-disable`
+- `@ts-ignore` or `@ts-expect-error`
+- `any`
+- non-null `!`
+- inline styles
+
+**Manual check** (name the OS): run `npm run tauri dev` with a real daemon and a relay, and pair a phone.
+1. Change the Computer name and apply through the confirm dialog. Show that the session ended, the status strip went Starting → Ready, and the phone shows the new name on the next connect.
+2. Enter a wrong 64-digit pin with a `wss://` relay and apply. Show that the status goes to Restarting/Failed and stays on that relay (no silent fallback).
+3. Clear the pin and apply. Show that it recovers.
+
+Attach screenshots of each step.
 
 ## 6. Architecture and Karpathy pillars (enforced at review)
 
-- **Rust/React separation.** Rust owns the RPC, the timeout and redaction. The UI only labels and lays out strings it already received redacted (AD-5, AD-9, AD-11).
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`, including how the redaction rules could over-mask, and why that's acceptable.
-2. **Simplicity first.** One command, one page, one pure helpers file. No polling, no caching across page switches, no export file.
-3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-11-diagnostics`, with atomic commits:
+- **Rust/React separation.** Rust owns validation, the file, the session ending and the restart. The page lays out values and messages and never decides validity (AD-1, AD-9).
+- **AD-5.** No credential can be stored, because the proxy and relay reject userinfo. `ConnectionSettings` and `SettingsInput` don't derive `Debug`.
+- **P17 stays intact.** `restart_with` kills only a child this supervisor spawned; dropping a handle still never kills the daemon.
+
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. It must cover:
+   - why the attached case is saved, not applied
+   - what a stuck `end_all_sessions` does to Apply
+   - why rejecting proxy credentials is acceptable for now
+2. **Simplicity first.** One file, one validator, one new supervisor method. No live validation while typing, no "test connection" button, no CA file.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-12-settings`, with atomic commits:
    - `test(desktop): …` red
    - `feat(desktop): …` green
-4. **Goal-driven TDD.** Commit the failing tests first. Paste the red excerpt, the green gate output, the CI links and the manual check in the PR.
+4. **Goal-driven TDD.** Commit the failing tests first. Paste into the PR:
+   - the red excerpt
+   - the green gate output
+   - the CI links
+   - the manual check
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `feat(desktop): DT-11 diagnostics`, with this body:
+Open one PR against `main` titled `feat(desktop): DT-12 settings`, with this body:
 
 ```
-Ticket: DT-11 (docs/TDD_TICKETS.md §5) · Acceptance: P16 (fail, skip and a future check render detail and hint; no JWT, code or proxy credentials in the output)
+Ticket: DT-12 (docs/TDD_TICKETS.md §5) · Acceptance: P16 (pin validated as 64 hex with optional colons; applying restarts only that workspace's daemon after naming the sessions it will end; never silently switches transport) · SCREENS D10
 
 ## Assumptions & Trade-offs
 - …
@@ -223,10 +402,10 @@ OS: …
 <red run excerpt>
 <green gate output>
 <CI run links>
-<manual check: screenshot, copied report, proxy-credential check>
+<manual check: screenshots for name change, wrong pin, recovery>
 
 ## Out of scope (left for later tickets)
-- Settings and its link (DT-12), audit log (DT-13), file export, scheduled checks
+- --relay-ca, proxy credentials, corporate workspaces, audit log (DT-13), UK-05 nits
 ```
 
-Then **stop immediately**. Don't start DT-12, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start DT-13 or UK-05, don't edit `docs/`, and don't merge.

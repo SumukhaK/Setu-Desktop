@@ -25,8 +25,9 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] UK-04 · Robustness nits · Done in [#35](https://github.com/SumukhaK/Setu-Desktop/pull/35)
 - [x] DT-09 · Tray and background · Done in [#33](https://github.com/SumukhaK/Setu-Desktop/pull/33)
 - [x] DT-10 · Android 11+ debugger pairing · Done in [#37](https://github.com/SumukhaK/Setu-Desktop/pull/37) (behind `VITE_SETU_ADB_PAIR=1`)
-- [ ] DT-11 · Diagnostics
+- [x] DT-11 · Diagnostics · Done in [#39](https://github.com/SumukhaK/Setu-Desktop/pull/39)
 - [ ] DT-12 · Settings: relay, pin, proxy
+- [ ] UK-05 · Small review nits (redact order, pairing-port hint)
 - [ ] DT-13 · This Computer's Audit Log
 - [ ] DT-14 · Corporate sign-in and token rotation
 - [ ] DT-15 · Corporate device directory
@@ -247,11 +248,14 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **SDK binding:** `doctor` → `{version, platform, ok, checks[{name,status,detail,hint}]}`.
 - **Note (2026-11-25):** `doctor`'s network checks take up to ~20 s, so Rust wraps the call in a 30 s timeout. `redact()` gains URL-userinfo and JWT rules, and every doctor string passes through it in Rust. `status` stays a string, so future values render generically.
 
+- **Review nit (2026-11-25, #39):** `redact()` masks 6-digit runs before the JWT rule, so a JWT whose signature holds a 6-digit run keeps the characters after it (for example `[redacted-jwt]******xyz`). Low impact, since a signature fragment is useless without the rest; fix by running rules 4 and 5 first (UK-05).
+
 ### DT-12 · Settings: relay, pin, proxy
 - **Files:** `src/features/settings/ConnectionSettings.tsx`, `src-tauri/src/daemon/config.rs`.
 - **Also (2026-11-22 audit, SCREENS D10):** the **Computer name** (`--label`) field. Until this ticket the label comes from `COMPUTERNAME`/`HOSTNAME`.
 - **Tests first:** P16 clarification (validate the pin as 64 hex characters with optional colons; applying restarts only that workspace's daemon after naming the sessions it will end; never silently switches transport).
 - **SDK binding:** daemon flags `--relay`, `--relay-pin`, `--relay-ca`, `--proxy`.
+- **Note (2026-11-25):** settings live in `<solo state dir>/desktop-settings.json` (`store/settings.rs`), validated in Rust (`commands/settings.rs`). The proxy field rejects a user name or password, as the prototype does, so no credential is stored or crosses the bridge. Apply ends live sessions, then `Supervisor::restart_with(config)` respawns only a daemon this app spawned; an attached daemon gets "saved, restart Setu to apply". `--relay-ca` (file picker) is left for later.
 
 ### DT-13 · This Computer's Audit Log
 - **Files:** `src/features/audit/AuditPage.tsx`, `integrityBadge.ts`, `src-tauri/src/commands/audit.rs` (save to user-chosen path).
@@ -349,6 +353,13 @@ Two spec facts were corrected from that run: `JOURNEYS.md` J5, and the DT-08 pro
 - **Out of scope:** behaviour changes beyond these seven.
 
 ---
+
+### UK-05 · Small review nits (DT-10, DT-11)
+- **When:** any time after DT-12; small, one PR.
+- **Files:** `src-tauri/src/log/redact.rs`, `src/features/pair-adb/PairAdbDialog.tsx`, plus the matching tests.
+- **Tests first:**
+  1. `redact()` runs the URL-userinfo and JWT rules before the pairing-code, 6-digit and JSON rules, so `eyJa.eyJb.abc123456xyz` becomes exactly `[redacted-jwt]` (DT-11 review nit).
+  2. The pairing-port field shows the hint "Leave empty to let the phone find it." (DT-10 review nit).
 
 ## 6. Setu-mobile tickets (in order)
 
