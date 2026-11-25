@@ -22,7 +22,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] UK-01 · CI and real-daemon smoke test · Done in [#26](https://github.com/SumukhaK/Setu-Desktop/pull/26)
 - [x] UK-02 · App shell: navigation rail, pages and styling · Done in [#29](https://github.com/SumukhaK/Setu-Desktop/pull/29)
 - [x] UK-03 · Solo end states and Reconnect · Done in [#31](https://github.com/SumukhaK/Setu-Desktop/pull/31)
-- [ ] UK-04 · Robustness nits · before DT-10
+- [x] UK-04 · Robustness nits · Done in [#35](https://github.com/SumukhaK/Setu-Desktop/pull/35)
 - [x] DT-09 · Tray and background · Done in [#33](https://github.com/SumukhaK/Setu-Desktop/pull/33)
 - [ ] DT-10 · Android 11+ debugger pairing
 - [ ] DT-11 · Diagnostics
@@ -239,6 +239,7 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **Files:** `src/features/pair-adb/PairAdbDialog.tsx`, `src-tauri/src/commands/pair_adb.rs`, `src-tauri/src/log/redact.rs`.
 - **Tests first:** P05 (rewritten), P20, redaction test (the 6-digit code never reaches the log sink, the crash reporter or the store).
 - **SDK binding:** `session.pair_adb {device_id, pairing_code, pairing_port?, timeout_ms?}` → `{paired, transport, output?}`; `-32023`, `-32024`; `adb_pair` event; `session.cancel`.
+- **Note (2026-11-25):** the daemon decodes params strictly (unknown key → `-32602`), so never send `adb_path`; it uses its `--adb` flag. `output` is dropped. The `adb_pair` event is not forwarded, because the command result already carries it. The UI ships behind `VITE_SETU_ADB_PAIR=1` until the §7 device-lab gate passes.
 
 ### DT-11 · Diagnostics
 - **Files:** `src/features/diagnostics/DiagnosticsPage.tsx`, `checks.ts` (unknown check names render generically).
