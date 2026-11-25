@@ -4,11 +4,12 @@ import type { ReactNode } from "react";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 
-export type Page = "workspace" | "devices";
+export type Page = "workspace" | "devices" | "diagnostics";
 
 const navItems: Record<Page, { label: string; icon: IconName }> = {
   workspace: { label: "Workspace", icon: "grid" },
   devices: { label: "Devices", icon: "phone" },
+  diagnostics: { label: "Diagnostics", icon: "terminal" },
 };
 
 export function Shell({

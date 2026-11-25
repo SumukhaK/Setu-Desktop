@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DevicesPage } from "./app/DevicesPage";
+import { DiagnosticsPage } from "./features/diagnostics/DiagnosticsPage";
 import { QuitConfirm } from "./app/QuitConfirm";
 import { Shell } from "./app/Shell";
 import type { Page } from "./app/Shell";
@@ -10,6 +11,7 @@ import type { DaemonPort } from "./daemon/status";
 import type { AdbPort } from "./features/adb/adbStatus";
 import { useAdbStatus } from "./features/adb/useAdbStatus";
 import type { DevicesPort } from "./features/devices/devicesPort";
+import type { DiagnosticsPort } from "./features/diagnostics/diagnosticsPort";
 import type { PairPort } from "./features/pair/pairPort";
 import type { PairAdbPort } from "./features/pair-adb/pairAdbPort";
 import type { SessionPort } from "./features/session/sessionPort";
@@ -34,6 +36,7 @@ export function App({
   clock = systemClock,
   devicesPort,
   windowPort,
+  diagnosticsPort,
 }: {
   port: DaemonPort;
   hubPort: SessionHubPort;
@@ -45,6 +48,7 @@ export function App({
   clock?: Clock;
   devicesPort?: DevicesPort;
   windowPort?: WindowPort;
+  diagnosticsPort?: DiagnosticsPort;
 }) {
   const stopPort = sessionPort ?? noSessionPort;
   const targetClipboard = clipboard ?? noClipboard;
@@ -60,6 +64,13 @@ export function App({
   const [pairDraft, setPairDraft] = useState("");
   const quitStarted = useRef(false);
   const live = Object.values(sessions.live);
+  const items: Page[] = ["workspace"];
+  if (devicesPort !== undefined) {
+    items.push("devices");
+  }
+  if (diagnosticsPort !== undefined) {
+    items.push("diagnostics");
+  }
   const endedNotices = sessions.ended.filter(
     (session) =>
       session.reason !== "closed" &&
@@ -121,11 +132,7 @@ export function App({
   }, [windowPort, quitRequested, live.length, attemptQuit]);
 
   return (
-    <Shell
-      page={page}
-      onNavigate={setPage}
-      items={devicesPort === undefined ? ["workspace"] : ["workspace", "devices"]}
-    >
+    <Shell page={page} onNavigate={setPage} items={items}>
       {quitError && (
         <p role="alert" className="notice">
           Couldn't quit Setu. Try again.
@@ -174,8 +181,12 @@ export function App({
                 }
           }
         />
-      ) : devicesPort !== undefined ? (
-        <DevicesPage port={devicesPort} liveDeviceIds={live.map((session) => session.deviceId)} />
+      ) : page === "devices" ? (
+        devicesPort !== undefined ? (
+          <DevicesPage port={devicesPort} liveDeviceIds={live.map((session) => session.deviceId)} />
+        ) : null
+      ) : diagnosticsPort !== undefined ? (
+        <DiagnosticsPage port={diagnosticsPort} clipboard={targetClipboard} />
       ) : null}
     </Shell>
   );

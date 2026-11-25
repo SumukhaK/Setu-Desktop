@@ -28,7 +28,8 @@ mod shell {
     use crate::commands::quit::{end_all_sessions, QuitLatch};
     use crate::commands::session::{connect_with_device, stop_session, StopOutcome};
     use crate::commands::{
-        cancel_pending, connect_with_code, pair_adb, ConnectOutcome, PairAdbOutcome, PendingConnect,
+        cancel_pending, connect_with_code, pair_adb, run_doctor, ConnectOutcome, DoctorOutcome,
+        PairAdbOutcome, PendingConnect,
     };
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
     use crate::events::{start as start_event_hub, EventHub};
@@ -163,6 +164,11 @@ mod shell {
     }
 
     #[tauri::command]
+    async fn diagnostics_run(state: tauri::State<'_, AppState>) -> Result<DoctorOutcome, String> {
+        Ok(run_doctor(ready_client(&state), Duration::from_secs(30)).await)
+    }
+
+    #[tauri::command]
     fn window_hide(app: tauri::AppHandle) {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.hide();
@@ -219,6 +225,7 @@ mod shell {
                 device_set_nickname,
                 adb_status,
                 adb_connect,
+                diagnostics_run,
                 window_hide,
                 app_quit
             ])

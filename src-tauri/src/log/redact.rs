@@ -6,7 +6,9 @@
 pub fn redact(input: &str) -> String {
     let codes = mask_pairing_codes(input);
     let digits = mask_six_digits(&codes);
-    mask_json_values(&digits)
+    let json = mask_json_values(&digits);
+    let urls = mask_url_userinfo(&json);
+    mask_jwts(&urls)
 }
 
 fn ascii_digit(byte: u8) -> bool {
@@ -133,6 +135,109 @@ fn mask_json_values(input: &str) -> String {
     out
 }
 
+fn scheme_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.')
+}
+
+fn whitespace(byte: u8) -> bool {
+    byte.is_ascii_whitespace()
+}
+
+/// Replace userinfo in `scheme://user[:pass]@host`, keeping the scheme, `@`
+/// and host. The last `@` before `/`, whitespace or end wins.
+fn mask_url_userinfo(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut cursor = 0;
+    let mut index = 0;
+    while index + 2 < bytes.len() {
+        if bytes[index] != b':' || bytes[index + 1] != b'/' || bytes[index + 2] != b'/' {
+            let ch = input[index..].chars().next().unwrap_or('\0');
+            index += ch.len_utf8();
+            continue;
+        }
+        let mut scheme_start = index;
+        while scheme_start > 0 && scheme_byte(bytes[scheme_start - 1]) {
+            scheme_start -= 1;
+        }
+        if scheme_start == index || !bytes[scheme_start].is_ascii_alphabetic() {
+            let ch = input[index..].chars().next().unwrap_or('\0');
+            index += ch.len_utf8();
+            continue;
+        }
+        let userinfo_start = index + 3;
+        let mut end = userinfo_start;
+        while end < bytes.len() && bytes[end] != b'/' && !whitespace(bytes[end]) {
+            end += 1;
+        }
+        let Some(at) = bytes[userinfo_start..end]
+            .iter()
+            .rposition(|byte| *byte == b'@')
+            .map(|offset| userinfo_start + offset)
+        else {
+            index = end;
+            continue;
+        };
+        out.push_str(&input[cursor..userinfo_start]);
+        out.push_str("[redacted]@");
+        cursor = at + 1;
+        index = cursor;
+    }
+    out.push_str(&input[cursor..]);
+    out
+}
+
+fn base64url(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+/// Mask three-part JWT-shaped tokens with base64url boundaries on both sides.
+fn mask_jwts(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut cursor = 0;
+    let mut index = 0;
+    while index + 3 < bytes.len() {
+        let starts = bytes[index] == b'e'
+            && bytes[index + 1] == b'y'
+            && bytes[index + 2] == b'J'
+            && (index == 0 || !base64url(bytes[index - 1]));
+        if !starts {
+            let ch = input[index..].chars().next().unwrap_or('\0');
+            index += ch.len_utf8();
+            continue;
+        }
+        let mut first_end = index + 3;
+        while first_end < bytes.len() && base64url(bytes[first_end]) {
+            first_end += 1;
+        }
+        if first_end == index + 3 || bytes.get(first_end) != Some(&b'.') {
+            let ch = input[index..].chars().next().unwrap_or('\0');
+            index += ch.len_utf8();
+            continue;
+        }
+        let mut second_end = first_end + 1;
+        while second_end < bytes.len() && base64url(bytes[second_end]) {
+            second_end += 1;
+        }
+        if second_end == first_end + 1 || bytes.get(second_end) != Some(&b'.') {
+            let ch = input[index..].chars().next().unwrap_or('\0');
+            index += ch.len_utf8();
+            continue;
+        }
+        let mut end = second_end + 1;
+        while end < bytes.len() && base64url(bytes[end]) {
+            end += 1;
+        }
+        out.push_str(&input[cursor..index]);
+        out.push_str("[redacted-jwt]");
+        cursor = end;
+        index = end;
+    }
+    out.push_str(&input[cursor..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,14 +279,20 @@ mod tests {
     fn redacts_url_userinfo_but_keeps_the_host() {
         let url = format!("http://{}:{}@proxy.corp:3128", "alice", "pw");
         assert_eq!(redact(&url), "http://[redacted]@proxy.corp:3128");
-        assert_eq!(redact("wss://relay.example.com/x"), "wss://relay.example.com/x");
+        assert_eq!(
+            redact("wss://relay.example.com/x"),
+            "wss://relay.example.com/x"
+        );
         assert_eq!(redact("user@example.com"), "user@example.com");
     }
 
     #[test]
     fn redacts_jwt_shaped_tokens_without_touching_the_edges() {
         let token = "eyJa.eyJb.sig";
-        assert_eq!(redact(&format!("before {token} after")), "before [redacted-jwt] after");
+        assert_eq!(
+            redact(&format!("before {token} after")),
+            "before [redacted-jwt] after"
+        );
         assert_eq!(redact("eyJ"), "eyJ");
         let adjacent = format!("x{token}x");
         assert_eq!(redact(&adjacent), adjacent);
