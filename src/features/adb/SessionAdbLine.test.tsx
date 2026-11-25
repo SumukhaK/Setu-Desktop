@@ -166,4 +166,32 @@ describe("SessionAdbLine", () => {
     });
     expect(button).not.toBeDisabled();
   });
+
+  it("shows Pair debugger only when requested and not attached", () => {
+    const fake = fakePort();
+    const { rerender } = render(<SessionAdbLine session={session} adb={up([])} port={fake.port} />);
+    expect(screen.queryByRole("button", { name: "Pair debugger" })).toBeNull();
+
+    const onPairDebugger = vi.fn();
+    rerender(
+      <SessionAdbLine
+        session={session}
+        adb={up([])}
+        port={fake.port}
+        onPairDebugger={onPairDebugger}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pair debugger" }));
+    expect(onPairDebugger).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <SessionAdbLine
+        session={session}
+        adb={up([{ serial: addr, state: "device" }])}
+        port={fake.port}
+        onPairDebugger={onPairDebugger}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Pair debugger" })).toBeNull();
+  });
 });
