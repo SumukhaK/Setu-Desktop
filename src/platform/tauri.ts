@@ -10,6 +10,7 @@ import type {
   ListOutcome,
   NicknameOutcome,
 } from "../features/devices/devicesPort";
+import type { DoctorOutcome, DiagnosticsPort } from "../features/diagnostics/diagnosticsPort";
 import type { ConnectOutcome, PairPort } from "../features/pair/pairPort";
 import type { PairAdbOutcome, PairAdbPort } from "../features/pair-adb/pairAdbPort";
 import type { SessionPort, StopOutcome } from "../features/session/sessionPort";
@@ -24,6 +25,12 @@ export const tauriDaemonPort: DaemonPort = {
     return listen<DaemonStatus>("daemon-status", (event) => {
       onStatus(event.payload);
     });
+  },
+};
+
+export const tauriDiagnosticsPort: DiagnosticsPort = {
+  run() {
+    return invoke<DoctorOutcome>("diagnostics_run");
   },
 };
 
