@@ -1,186 +1,177 @@
-# Builder prompt · DT-10 · Android 11+ debugger pairing
+# Builder prompt · DT-11 · Diagnostics
 
 You are the builder for one ticket in `SumukhaK/Setu-Desktop`. Do this ticket only, open one PR, then stop.
 
 ## 0. Read first (in this order, nothing else)
 
 1. `docs/CODEBASE_MEMORY.md` (interfaces, AD-1 to AD-14).
-2. `docs/TDD_TICKETS.md` §5 "DT-10", §3 rows P05 and P20, and §7 (the device-lab gate).
-3. `docs/JOURNEYS.md`: the `session.pair_adb` paragraph, the version-skew rule (`-32024`), and rows P05 and P20.
-4. Setu-SDK v1.1.0 `API_SPEC.md`: `PairADB` (§1.1), the `adb_pair` event (§1.5), `session.pair_adb` and `session.cancel` (§2), and the error table (§2.3): https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
-5. Existing code you'll use or mirror:
-   - `src-tauri/src/commands/session.rs` (`PairingCode`, `PendingConnect`, `claim_slot`, `SlotGuard`, `connect_with_code`, `cancel_pending`)
-   - `src-tauri/src/commands/devices.rs` (`valid_device_id`)
-   - `src-tauri/src/rpc/errors.rs` (`SetuError::AdbPairFailed` = -32023, `Unsupported` = -32024, `NotPaired` = -32012, `Unavailable` = -32011, `Cancelled` = -32022)
-   - `src-tauri/src/app/mod.rs` (command registration), `src-tauri/tests/session_commands.rs` (FakeDaemon patterns)
-   - `src/features/pair/` (`PairDialog`, `pairPort.ts`), `src/features/adb/SessionAdbLine.tsx`, `src/features/session/SessionCard.tsx`, `src/app/WorkspacePage.tsx`, `src/App.tsx`, `src/platform/tauri.ts`, `src/main.tsx`
+2. `docs/TDD_TICKETS.md` §5 "DT-11" and §3 row P16.
+3. `docs/JOURNEYS.md` J6 "Diagnostics" paragraph and row P16; `docs/SCREENS.md` row D09.
+4. Setu-SDK v1.1.0 `API_SPEC.md` §1.7 (`DoctorReport`) and the `doctor` row in §2: https://github.com/SumukhaK/Setu/blob/v1.1.0/API_SPEC.md
+5. The prototype (visual reference only, never app code):
+   - `prototype.js`: `checks` (the label list) and `doctorPage()`
+   - `styles.css`: `.status`, `.status > span`, `.status.good`, `.status.warning`, `.status.critical`, `.standard-card*`, `.hint`, `.muted`
+6. Existing code you'll use or extend:
+   - `src-tauri/src/log/redact.rs` (DT-10), `src-tauri/src/app/mod.rs`
+   - `src-tauri/tests/support/fake_daemon.rs`
+   - `src/app/Shell.tsx` (`Page`, `navItems`, `items`), `src/App.tsx`, `src/platform/tauri.ts`, `src/main.tsx`, `src/styles/app.css`
 
-**Facts this ticket relies on (read by the reviewer in the v1.1.0 daemon source, `core/internal/daemon/daemon.go`):**
-- `session.pair_adb` params are `{device_id, pairing_code, pairing_port?, adb_path?, timeout_ms?}`. The daemon decodes them **strictly**, so an unknown key returns `-32602`.
-  - `device_id` and `pairing_code` are required.
-  - `timeout_ms` ≤ 0 becomes 60000.
-  - `pairing_port` 0 or absent makes the phone discover `_adb-tls-pairing._tcp` itself.
-- The result is `{device_id, paired, transport, output?}`. `output` is raw `adb pair` text, so the desktop drops it.
-- Errors:
-  - a code that isn't 6 digits → `bad_code`
-  - an unknown device → `-32012`
-  - adb rejected the code, or nothing answered on the port → `-32023`
-  - the phone runs a 1.0 agent → `-32024`
-  - cancelled → `-32022`
-- `session.cancel {request_id}` cancels the in-flight request on that connection. `call_cancellable` already does this (AD-12).
-- The daemon picks adb from its own `--adb` flag (`DaemonConfig.adb_path`). The desktop never sends `adb_path`.
-- The `adb_pair` event reports the same outcome. The requesting client already has the result, so the hub allowlist stays as it is (AD-11). Don't forward it.
-- There is no logging crate. The only native text sink today is `eprintln!` in `app::run`.
+**Facts this ticket relies on (read by the reviewer in the v1.1.0 source, `core/pkg/genadb/doctor.go`):**
+- `doctor` takes no params and returns `{version, platform, ok, checks: [{name, status, detail, hint?}]}`. `hint` is omitted when empty. `ok` is false when any check is `fail`.
+- `status` is one of `ok`, `warn`, `fail` or `skip` today. Treat any other string as unknown, not as an error.
+- Checks today, in order:
+  1. `adb`
+  2. `state`
+  3. `paired_devices`
+  4. `proxy_env`
+  5. either `relay` (skip, when no relay is configured) or `relay_dns` then `relay_reach`
+  6. `audit_log`
+  
+  More may come later, and the UI must render any unknown name.
+- The network checks use an 8 s timeout each, so one run can take about 20 s. `RpcClient::call` has no timeout of its own.
+- The SDK already strips proxy credentials in `proxy_env`. Other details (DNS and dial errors, file paths, device ids) are free text. Rust redacts every string before it crosses the bridge.
 
 ## 1. Goal
 
-On a live session's card, **Pair debugger** opens a dialog. The user enters the six-digit code from the phone's *Wireless debugging → Pair device with pairing code* screen, plus an optional port. The desktop calls `session.pair_adb` once with exactly those values (P05).
-- **Success:** the dialog closes, and the card says the debugger is paired and to use **Connect ADB**.
-- **`-32023`:** the form stays open with the code cleared and asks for a fresh code.
-- **`-32024`:** shows "Update Setu on the phone to use this." (P20).
-
-The code is never logged, persisted, put in a crash report or held in App state. The feature stays **behind a build flag** until the §7 device-lab gate passes.
+A **Diagnostics** page in the rail runs the daemon's `doctor` and lists every check with its label, a status pill, the detail and the fix hint (P16).
+- Unknown check names and statuses render generically.
+- **Run again** re-runs the checks, and **Copy report** copies a plain-text report.
+- No JWT, pairing code or proxy credential can appear on the page or in the copied text, because Rust redacts first.
 
 Out of scope:
-- Forwarding the `adb_pair` event.
-- mDNS discovery on the desktop.
-- Showing `output`.
-- Diagnostics export (DT-11).
-- Enabling the flag by default.
+- The Settings page and its "Connection settings" link (DT-12).
+- Audit log (DT-13).
+- File export.
+- Running checks on a schedule.
 
 ## 2. Files (create or change only these)
 
 ```
-src-tauri/src/log/mod.rs, src-tauri/src/log/redact.rs   pure redact(); unit tests in redact.rs
-src-tauri/src/lib.rs                                    pub mod log;
-src-tauri/src/commands/pair_adb.rs                      AdbPairCode, PairAdbOutcome, pair_adb()
-src-tauri/src/commands/mod.rs                           pub mod pair_adb; re-exports
-src-tauri/src/commands/session.rs                       visibility only: claim_slot / SlotGuard → pub(crate)
-src-tauri/tests/pair_adb_commands.rs                    FakeDaemon tests (§4)
-src-tauri/src/app/mod.rs                                + command session_pair_adb; eprintln goes through redact()
-src/features/pair-adb/pairAdbPort.ts                    outcome mirror, PairAdbPort, pairAdbMessage(), parseAdbPairInput()
-src/features/pair-adb/PairAdbDialog.tsx (+ .test.tsx)
-src/features/adb/SessionAdbLine.tsx (+ test)            optional onPairDebugger → "Pair debugger" button
-src/features/session/SessionCard.tsx (+ test)           optional pairAdbPort; owns dialog open + paired notice
-src/app/WorkspacePage.tsx, src/App.tsx, src/App.test.tsx   thread optional pairAdbPort through
-src/platform/tauri.ts                                   + tauriPairAdbPort
-src/vite-env.d.ts                                       ImportMetaEnv { readonly VITE_SETU_ADB_PAIR?: string }
-src/main.tsx                                            pass pairAdbPort only when VITE_SETU_ADB_PAIR === "1"
-README.md                                               one line: how to build with the flag on
+src-tauri/src/log/redact.rs                 + two rules (§3) and their unit tests
+src-tauri/src/commands/diagnostics.rs       DoctorOutcome, run_doctor()
+src-tauri/src/commands/mod.rs               pub mod diagnostics; re-exports
+src-tauri/tests/diagnostics_commands.rs     FakeDaemon tests (§4)
+src-tauri/src/app/mod.rs                    + command diagnostics_run
+src/features/diagnostics/checks.ts          labels, statusView(), reportText()
+src/features/diagnostics/checks.test.ts
+src/features/diagnostics/diagnosticsPort.ts DoctorOutcome mirror, DiagnosticsPort
+src/features/diagnostics/DiagnosticsPage.tsx (+ .test.tsx)
+src/app/Shell.tsx (+ Shell.test.tsx)        Page += "diagnostics" (icon "terminal", label "Diagnostics")
+src/App.tsx, src/App.test.tsx               optional diagnosticsPort, + rail item and page
+src/platform/tauri.ts                       + tauriDiagnosticsPort
+src/main.tsx                                pass diagnosticsPort
+src/styles/app.css                          port .status, .status > span, .status.good/.warning/.critical, .standard-card (+ > .list, > .list > li), .hint, .muted
 ```
 
-Don't touch `daemon/`, `rpc/`, `events/`, `adb/`, `store/`, `capabilities/`, `tauri.conf.json`, `src/state/`, `src/styles/`, `docs/`, the prototype or CI. Add no crate (no `regex`, no `log`/`tracing`) and no npm package.
+Don't touch `daemon/`, `rpc/`, `events/`, `adb/`, `store/`, the other `commands/*`, `capabilities/`, `tauri.conf.json`, `src/state/`, the other feature folders, `docs/`, `README.md`, the prototype or CI. Add no crate and no npm package.
 
 ## 3. Contract to implement (decided by the architect; do not reinterpret)
 
-**Redaction (`log/redact.rs`, pure, no Tauri).** `pub fn redact(input: &str) -> String` masks, in this order:
-1. every `NNNN-NNNNNN` code (4 digits, `-`, 6 digits, not touching other digits) → `****-******`
-2. every run of **exactly 6** ASCII digits not touching other digits → `******`. It is deliberately broad: a 6-digit pid also gets masked, and that's acceptable.
-3. the string value of the JSON keys `"pairing_code"`, `"token"` and `"auth_token"` → `"[redacted]"`, whatever its length
+**Redaction (`log/redact.rs`).** Keep the three DT-10 rules. Append two more, applied after them:
+4. **URL userinfo:** in any `scheme://user[:pass]@host`, replace everything between `://` and the last `@` that comes before the next `/`, whitespace or end with `[redacted]`. The result is `scheme://[redacted]@host`.
+5. **JWT-shaped tokens:** `eyJ` followed by base64url characters, a `.`, base64url characters, a `.`, and optional base64url characters, becomes `[redacted-jwt]`. The token must not touch other base64url characters on either side.
 
-Hand-write the scanning (no regex crate). Everything else passes through byte-for-byte.
+Both rules are hand-scanned. Everything else passes through byte-for-byte.
 
-**Native command (`commands/pair_adb.rs`, no Tauri).**
+**Command (`commands/diagnostics.rs`, no Tauri).**
 
 ```rust
-pub struct AdbPairCode(String);          // exactly 6 ASCII digits; no Debug, Clone, Serialize
-impl AdbPairCode { pub fn parse(raw: &str) -> Option<Self>; }
+#[derive(Clone, Serialize, PartialEq, Debug)]
+pub struct DoctorCheck { pub name: String, pub status: String, pub detail: String, pub hint: Option<String> }
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum PairAdbOutcome {
-    Paired { transport: String },
-    Malformed,          // bad code, or a port of 0 (the UI sends None for "discover")
-    InvalidDevice,      // fails valid_device_id
+pub enum DoctorOutcome {
+    Report { version: String, platform: String, ok: bool, checks: Vec<DoctorCheck> },
     NotReady,
-    AlreadyPending,     // the shared PendingConnect slot is taken
-    PairFailed,         // -32023, or a result with paired: false
-    Unsupported,        // -32024
-    NotPaired,          // -32012
-    Unavailable,        // -32011
-    Cancelled,          // -32022
+    TimedOut,
     Failed { code: Option<i64> },
 }
 
-pub async fn pair_adb(
-    client: Option<RpcClient>,
-    device_id: &str,
-    raw_code: &str,
-    pairing_port: Option<u16>,
-    pending: &PendingConnect,
-) -> PairAdbOutcome;
+pub async fn run_doctor(client: Option<RpcClient>, limit: Duration) -> DoctorOutcome;
 ```
 
-- Validate in this order: code, then port, then device id, then client, then slot. A malformed input never reaches the daemon.
-- Share `PendingConnect` with the two connect flows, so only one of the three runs at a time. Cancel goes through the existing `session_cancel_connect` command.
-- Params are exactly `{"device_id", "pairing_code", "timeout_ms": 60000}`, plus `"pairing_port"` only when it's `Some`. Never send `adb_path`.
-- Parse the result as `{paired: bool, transport: String}`. Ignore `output` and never keep it. A missing field gives `Failed { code: None }`.
-- Shell: `#[tauri::command] async fn session_pair_adb(device_id: String, pairing_code: String, pairing_port: Option<u16>, ..) -> Result<PairAdbOutcome, String>`. Pass the existing `eprintln!` in `run()` through `redact()`.
+- Call `doctor` with no params, wrapped in `tokio::time::timeout(limit, …)`. The shell passes 30 s.
+- Parse it leniently:
+  - a missing `hint` or an empty one becomes `None`
+  - a missing `checks` becomes `[]`
+  - a missing `version` or `platform` becomes `""`
+  - a non-object result becomes `Failed { code: None }`
+- Pass **every** string (name, status, detail, hint, version, platform) through `redact()` before building the outcome.
+- `ok` comes from the daemon. Don't recompute it.
+- Shell: `#[tauri::command] async fn diagnostics_run(..) -> Result<DoctorOutcome, String>` using `ready_client`.
 
 **UI.**
-- `pairAdbPort.ts`:
-  - the `PairAdbOutcome` mirror
-  - `PairAdbPort { pair(deviceId, code, port: number | null): Promise<PairAdbOutcome>; cancel(): Promise<boolean> }`
-  - `parseAdbPairInput(code, port)`: strips spaces from the code and requires 6 digits; port is empty → `null`, otherwise an integer 1–65535
-  - `pairAdbMessage(outcome)`:
-    - `paired`, `cancelled` → `null`
-    - `malformed` → "Enter the 6-digit code and, if one is shown, a port from 1 to 65535."
-    - `pair_failed` → "Pairing didn't work. Get a new code on the phone and try again."
-    - `unsupported` → "Update Setu on the phone to use this."
-    - `not_paired` → "This device isn't paired any more. Pair it again with a new code."
-    - `unavailable` → "The phone is offline or can't be reached. Check that Setu is hosting on it."
-    - `already_pending` → "Another connection is already in progress."
+- `checks.ts`:
+  - `checkLabel(name)` returns:
+    - `adb` → "Android Debug Bridge"
+    - `state` → "State directory"
+    - `paired_devices` → "Paired devices"
+    - `proxy_env` → "Proxy environment"
+    - `relay` → "Relay"
+    - `relay_dns` → "Relay DNS"
+    - `relay_reach` → "Relay reachability"
+    - `audit_log` → "Audit log"
+    - anything else → the raw name
+  - `statusView(status)` returns `{ label, tone }`:
+    - `ok` → `{ "OK", "good" }`
+    - `warn` → `{ "Warning", "warning" }`
+    - `fail` → `{ "Failed", "critical" }`
+    - `skip` → `{ "Skipped", "neutral" }`
+    - anything else → `{ status.toUpperCase() || "UNKNOWN", "neutral" }`
+  - `reportText(report)`: a plain-text report, built only from the already-redacted report fields:
+    - first line: `Setu doctor · {version} · {platform} · {ok ? "all checks passed" : "some checks failed"}`
+    - then one line per check: `{label} ({name}): {statusLabel} · {detail}`
+    - plus `  Fix: {hint}` when there's a hint
+- `DiagnosticsPage` (props `{ port: DiagnosticsPort; clipboard: { writeText(s: string): Promise<void> } }`):
+  - Heading: `<header className="page-heading">` with `<h1 tabIndex={-1}>Diagnostics</h1>` and subtitle "setu doctor · This computer".
+  - Run `port.run()` once on mount. While pending, show `<p className="notice" role="status">Checking local diagnostics…</p>`.
+  - **Report:** a `<section className="card standard-card">` holding:
+    - `<h2>Doctor checks</h2>`
+    - a summary line: "All checks passed", or "Some checks failed" when `!ok`
+    - `<p className="hint">{version} · {platform}</p>`
+    - `<ul className="list">` with one `<li>` per check, containing `<strong>{label}</strong> <code>{name}</code>`, `<p>{detail}</p>` and, when there's a hint and the status isn't `ok`, `<p className="muted">Fix: {hint}</p>`, plus `<span className={"status " + tone}><span aria-hidden="true"></span>{label}</span>`
+    - buttons **Run again** (`button secondary`, disabled while pending) and **Copy report** (`button quiet`), which writes `reportText` to the clipboard and then shows "Report copied." in a `role="status"` line
+  - **Errors:**
     - `not_ready` → "The Setu service isn't ready yet. Try again in a moment."
-    - `invalid_device` and `failed{code}` → "Couldn't pair (error N). Try again.", or "Couldn't pair. Try again." when there's no code
-- `PairAdbDialog` (`role="dialog"`, `aria-labelledby`, the `dialog*` classes like `PairDialog`):
-  - Title: "Pair debugger (Android 11+)".
-  - Hint: "On the phone, open Settings › Developer options › Wireless debugging › Pair device with pairing code."
-  - Fields: "Pairing code" (`inputMode="numeric"`, `autoComplete="off"`) and "Port (optional)". Their state is **local to the dialog**, never lifted.
-  - Buttons: **Pair** (`button primary`) and **Cancel** (`button quiet`).
-  - Submit validates with `parseAdbPairInput` first. Then it calls `pair()` once, shows "Pairing…" and disables **Pair**.
-  - `paired` calls `onPaired()`. `cancelled` calls `onClose()`.
-  - `pair_failed` keeps the dialog open, clears the code and keeps the port. Every other outcome shows its message in `<p role="alert" className="notice">`.
-  - A rejected promise shows "Couldn't reach the Setu service. Try again." In every case, clear the pending state in `finally`.
-  - **Cancel** while pending calls `port.cancel()`. Unmount while pending also calls `port.cancel()`, the same way `PairDialog` does after UK-04.
-- `SessionAdbLine`: new optional `onPairDebugger`. When it's given and the attachment isn't `"attached"`, render **Pair debugger** (`button secondary`) next to **Connect ADB**.
-- `SessionCard`: new optional `pairAdbPort`.
-  - It holds `pairingDebugger: boolean` and `debuggerPaired: boolean`, passes `onPairDebugger` only when the port exists, and renders the dialog.
-  - On `onPaired`, close the dialog and show `<p role="status">Debugger paired. Use Connect ADB to attach.</p>`. Hide that line once the attachment becomes `"attached"`.
-- `WorkspacePage` and `App` only pass the optional port through.
-- `main.tsx` passes `pairAdbPort={tauriPairAdbPort}` only when `import.meta.env.VITE_SETU_ADB_PAIR === "1"`.
-- No inline styles and no new CSS.
+    - `timed_out` → "Diagnostics took too long. Try again."
+    - `failed` → "Couldn't run diagnostics (error N). Try again.", or the same without the code
+    - a rejection → "Couldn't reach the Setu service. Try again."
+    
+    Each shows in `<p className="notice warning" role="alert">`, with **Run again** still available.
+  - A late result after unmount is ignored.
+- `Shell`: `Page` gains `"diagnostics"`, with `navItems.diagnostics = { label: "Diagnostics", icon: "terminal" }`.
+- `App`: optional `diagnosticsPort`. Add `"diagnostics"` to `items` after Devices when the port is given, and render `DiagnosticsPage` for that page, using the same clipboard App already has. `main.tsx` passes `tauriDiagnosticsPort`.
+- CSS: port the listed prototype rules verbatim, apart from formatting. No inline styles.
 
 ## 4. TDD: write these tests first, see them fail, then implement
 
-- **`redact.rs` unit tests:**
-  - `1234-567890` and `482913` are masked
-  - `12345`, `1234567` and a port `:37099` are untouched
-  - `{"pairing_code":"482913","x":1}` becomes `{"pairing_code":"[redacted]","x":1}`
-  - `"token":"eyJ…"` is redacted
-  - non-ASCII text passes through unchanged
-- **`tests/pair_adb_commands.rs`** (FakeDaemon, every wait under `timeout`):
-  - **Exact params:** port 37099 → exactly `{"device_id":"pixel-7","pairing_code":"482913","pairing_port":37099,"timeout_ms":60000}`. Port `None` → no `pairing_port` key. `adb_path` is never sent.
-  - **Malformed input, no request sent:** `"48291"`, `"4829135"`, `"48a913"`, port `Some(0)` and an invalid device id each return `Malformed` or `InvalidDevice`.
-  - **Result mapping:**
-    - `{paired:true, transport:"lan", output:"Successfully paired…"}` → `Paired{transport:"lan"}`
-    - `{paired:false, transport:"lan"}` → `PairFailed`
-    - errors `-32023`, `-32024`, `-32012`, `-32011` → their variants
-    - `-32603` → `Failed{Some(-32603)}`
-  - **Slot:** a connect holding the slot → `AlreadyPending`. Cancel during an in-flight pair sends `session.cancel {request_id}` and returns `Cancelled`. The slot is free afterwards.
-  - **Never stored:** after a pair call with `482913`, no file under the test's state tempdir contains `482913`. The `PairAdbOutcome` `Debug` text never contains it either.
-- **`PairAdbDialog.test.tsx`:**
-  - Submitting with an invalid code or port 70000 shows the malformed message and doesn't call `pair`.
-  - A valid submit calls `pair("pixel-7", "482913", 37099)` once; an empty port calls it with `null`.
-  - A double click calls `pair` only once.
-  - `pair_failed` clears the code, keeps the port and shows the message.
-  - `unsupported` shows "Update Setu on the phone to use this."
-  - Cancel while pending calls `cancel`, and so does unmount while pending.
-  - A rejected promise shows the service message.
-- **`SessionCard` / `SessionAdbLine` tests:**
-  - No **Pair debugger** without a port, or when attached.
-  - `paired` closes the dialog and shows the status line, which hides once the ADB snapshot shows `attached`.
-  - Reopening the dialog shows an empty code field.
-- **`App.test.tsx`:** without `pairAdbPort` there's no **Pair debugger** anywhere, which is the flag-off default.
+- **`redact.rs`:**
+  - `http://alice:s3cret@proxy.corp:3128` → `http://[redacted]@proxy.corp:3128`
+  - `wss://relay.example.com/x` is untouched
+  - `user@example.com` (no `://`) is untouched
+  - a 3-part `eyJhbGciOi…` token inside text → `[redacted-jwt]`
+  - `eyJ` alone is untouched
+  - all DT-10 cases still pass
+- **`tests/diagnostics_commands.rs`** (FakeDaemon, every wait under `timeout`):
+  - **A real-shaped report:** a request with method `doctor` and no params; the checks are kept in order; `hint` is absent for an empty hint.
+  - **A detail containing `http://u:p@proxy:8080`, a `1234-567890` code and an `eyJa.eyJb.sig` token:** the outcome holds none of the secrets and does hold `[redacted]`.
+  - **An unknown check** `{name:"future_check", status:"maybe", detail:"x"}` passes through unchanged.
+  - **Missing `checks`** → an empty list.
+  - **A non-object result** → `Failed{None}`.
+  - **An error `-32603`** → `Failed{Some(-32603)}`.
+  - **A `None` client** → `NotReady`.
+  - **A daemon that never replies, with `limit` 200 ms** → `TimedOut`.
+- **`checks.test.ts`:** each known label, the fallback for an unknown name, every `statusView` branch including an unknown status and an empty one, and the exact `reportText` lines, with and without a hint.
+- **`DiagnosticsPage.test.tsx`:**
+  - pending → the report renders
+  - a `fail` check shows its detail and "Fix: …"; an `ok` check hides its hint
+  - a future check and status render generically
+  - **Run again** calls `run` a second time
+  - **Copy report** writes exactly `reportText(...)`
+  - each error branch shows its message
+  - a late resolve after unmount doesn't throw or update
+- **`Shell.test.tsx` / `App.test.tsx`:** the Diagnostics rail item appears only with a `diagnosticsPort`; clicking it focuses the "Diagnostics" `h1` and calls `run` once.
 
 ## 5. Gates (all must pass before you push)
 
@@ -201,28 +192,24 @@ cargo test
 
 All three CI jobs (`gates-linux`, `gates-windows`, `e2e-linux`) must be green on the PR head. Use no `#[allow(...)]`, no `unwrap()` outside tests, no `eslint-disable`, no `@ts-ignore` or `@ts-expect-error`, no `any`, no non-null `!`, and no inline styles.
 
-**Manual check** (name the OS): run `VITE_SETU_ADB_PAIR=1 npm run tauri dev` with a real daemon. If you have an Android 11+ phone, pair the debugger through a live session, then **Connect ADB**. Otherwise, show the `-32012` path against a forgotten device id and say "no Android 11+ phone available".
+**Manual check** (name the OS): run `npm run tauri dev` with a real daemon and open Diagnostics. Attach a screenshot of the page and paste the copied report. Set `HTTPS_PROXY=http://user:pass@127.0.0.1:9` before the run, and show that neither the page nor the copied text contains `user:pass`.
 
 ## 6. Architecture and Karpathy pillars (enforced at review)
 
-- **Rust/React separation.**
-  - Rust re-validates the code and port and owns the request and its cancellation (AD-12).
-  - The code never crosses back to the UI, and it isn't in any `Debug` output (AD-5).
-  - `redact()` is the one choke point for native text from now on; DT-11 builds on it.
-  - The UI keeps the code only in the open dialog's local state.
-1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`. If the real daemon differs from §0, follow the daemon, test it and record it.
-2. **Simplicity first.** One pure redaction module, one command, one dialog, one port. No logging framework, no settings UI for the flag.
-3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-10-pair-adb`, with atomic commits:
+- **Rust/React separation.** Rust owns the RPC, the timeout and redaction. The UI only labels and lays out strings it already received redacted (AD-5, AD-9, AD-11).
+1. **Think before coding.** The PR description opens with `## Assumptions & Trade-offs`, including how the redaction rules could over-mask, and why that's acceptable.
+2. **Simplicity first.** One command, one page, one pure helpers file. No polling, no caching across page switches, no export file.
+3. **Surgical changes.** Touch only the files in §2. Branch from latest `main` as `feature/DT-11-diagnostics`, with atomic commits:
    - `test(desktop): …` red
-   - `fix(desktop): …` green
-4. **Goal-driven TDD.** Commit the failing tests first. Paste the red excerpt, the green gate output and the CI links in the PR.
+   - `feat(desktop): …` green
+4. **Goal-driven TDD.** Commit the failing tests first. Paste the red excerpt, the green gate output, the CI links and the manual check in the PR.
 
 ## 7. PR and hard stop
 
-Open one PR against `main` titled `feat(desktop): DT-10 Android 11+ debugger pairing`, with this body:
+Open one PR against `main` titled `feat(desktop): DT-11 diagnostics`, with this body:
 
 ```
-Ticket: DT-10 (docs/TDD_TICKETS.md §5) · Acceptance: P05 (rewritten: exact params once, paired → Connect ADB, -32023 keeps the form, -32024 update copy, code never logged or stored), P20 (-32024 copy), redaction
+Ticket: DT-11 (docs/TDD_TICKETS.md §5) · Acceptance: P16 (fail, skip and a future check render detail and hint; no JWT, code or proxy credentials in the output)
 
 ## Assumptions & Trade-offs
 - …
@@ -235,10 +222,10 @@ OS: …
 <red run excerpt>
 <green gate output>
 <CI run links>
-<manual check, or "no Android 11+ phone available" plus the -32012 path>
+<manual check: screenshot, copied report, proxy-credential check>
 
 ## Out of scope (left for later tickets)
-- adb_pair event forwarding, desktop mDNS, diagnostics export (DT-11), enabling the flag by default (after the §7 device-lab gate)
+- Settings and its link (DT-12), audit log (DT-13), file export, scheduled checks
 ```
 
-Then **stop immediately**. Don't start DT-11, don't edit `docs/`, and don't merge.
+Then **stop immediately**. Don't start DT-12, don't edit `docs/`, and don't merge.
