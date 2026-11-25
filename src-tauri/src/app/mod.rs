@@ -27,7 +27,9 @@ mod shell {
     };
     use crate::commands::quit::{end_all_sessions, QuitLatch};
     use crate::commands::session::{connect_with_device, stop_session, StopOutcome};
-    use crate::commands::{cancel_pending, connect_with_code, ConnectOutcome, PendingConnect};
+    use crate::commands::{
+        cancel_pending, connect_with_code, pair_adb, ConnectOutcome, PairAdbOutcome, PendingConnect,
+    };
     use crate::daemon::{DaemonConfig, DaemonState, Supervisor, SupervisorOptions, Workspace};
     use crate::events::{start as start_event_hub, EventHub};
     use crate::store::nicknames::NicknameStore;
@@ -94,6 +96,23 @@ mod shell {
         state: tauri::State<'_, AppState>,
     ) -> Result<ConnectOutcome, String> {
         Ok(connect_with_device(ready_client(&state), &device_id, &state.pending).await)
+    }
+
+    #[tauri::command]
+    async fn session_pair_adb(
+        device_id: String,
+        pairing_code: String,
+        pairing_port: Option<u16>,
+        state: tauri::State<'_, AppState>,
+    ) -> Result<PairAdbOutcome, String> {
+        Ok(pair_adb(
+            ready_client(&state),
+            &device_id,
+            &pairing_code,
+            pairing_port,
+            &state.pending,
+        )
+        .await)
     }
 
     #[tauri::command]
@@ -193,6 +212,7 @@ mod shell {
                 session_connect_code,
                 session_cancel_connect,
                 session_connect_device,
+                session_pair_adb,
                 session_stop,
                 devices_list,
                 devices_forget,
@@ -342,7 +362,10 @@ mod shell {
             .run(tauri::generate_context!());
 
         if let Err(error) = result {
-            eprintln!("setu-desktop failed to start: {error}");
+            eprintln!(
+                "setu-desktop failed to start: {}",
+                crate::log::redact(&error.to_string())
+            );
         }
     }
 

@@ -6,6 +6,7 @@ import {
   tauriAdbPort,
   tauriDaemonPort,
   tauriDevicesPort,
+  tauriPairAdbPort,
   tauriPairPort,
   tauriSessionHubPort,
   tauriSessionPort,
@@ -24,6 +25,7 @@ createRoot(root).render(
       port={tauriDaemonPort}
       hubPort={tauriSessionHubPort}
       pairPort={tauriPairPort}
+      pairAdbPort={import.meta.env.VITE_SETU_ADB_PAIR === "1" ? tauriPairAdbPort : undefined}
       adbPort={tauriAdbPort}
       sessionPort={tauriSessionPort}
       clipboard={navigator.clipboard}

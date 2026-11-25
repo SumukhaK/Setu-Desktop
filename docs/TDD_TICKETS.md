@@ -24,7 +24,7 @@ Updated by the post-merge ritual. Android (AT-*) status is tracked in Setu-mobil
 - [x] UK-03 · Solo end states and Reconnect · Done in [#31](https://github.com/SumukhaK/Setu-Desktop/pull/31)
 - [x] UK-04 · Robustness nits · Done in [#35](https://github.com/SumukhaK/Setu-Desktop/pull/35)
 - [x] DT-09 · Tray and background · Done in [#33](https://github.com/SumukhaK/Setu-Desktop/pull/33)
-- [ ] DT-10 · Android 11+ debugger pairing
+- [x] DT-10 · Android 11+ debugger pairing · Done in [#37](https://github.com/SumukhaK/Setu-Desktop/pull/37) (behind `VITE_SETU_ADB_PAIR=1`)
 - [ ] DT-11 · Diagnostics
 - [ ] DT-12 · Settings: relay, pin, proxy
 - [ ] DT-13 · This Computer's Audit Log
@@ -245,6 +245,7 @@ The repos are still wireframes, so the tickets fix a stack. Change it once, here
 - **Files:** `src/features/diagnostics/DiagnosticsPage.tsx`, `checks.ts` (unknown check names render generically).
 - **Tests first:** P16 (fail, skip and a future check render detail and hint; no JWT, code or proxy credentials in the output).
 - **SDK binding:** `doctor` → `{version, platform, ok, checks[{name,status,detail,hint}]}`.
+- **Note (2026-11-25):** `doctor`'s network checks take up to ~20 s, so Rust wraps the call in a 30 s timeout. `redact()` gains URL-userinfo and JWT rules, and every doctor string passes through it in Rust. `status` stays a string, so future values render generically.
 
 ### DT-12 · Settings: relay, pin, proxy
 - **Files:** `src/features/settings/ConnectionSettings.tsx`, `src-tauri/src/daemon/config.rs`.
